@@ -1,9 +1,7 @@
-"""
-知识库构建脚本 - 自动从数据库读取 Schema 并构建向量知识库
-"""
+# Knowledge Base Build Script
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import DB_URI, CHROMA_HOST, CHROMA_PORT
 from services.knowledge_base import KnowledgeBase
@@ -11,68 +9,69 @@ from services.db_service import DatabaseService
 
 
 def main():
-    """自动构建知识库"""
-    print("🚀 开始构建知识库...")
+    print("\n" + "="*60)
+    print("Building Knowledge Base")
+    print("="*60)
 
     try:
-        # 初始化数据库服务
-        print("\n📦 初始化数据库服务...")
+        # Initialize database service
+        print("\n[1] Initializing database service...")
         db_service = DatabaseService(DB_URI)
 
-        # 测试数据库连接
+        # Test connection
         if not db_service.test_connection():
-            print("❌ 数据库连接失败，请检查配置")
+            print("    [FAIL] Database connection failed, please check configuration")
             return
 
-        # 初始化知识库
-        print(f"📦 初始化知识库服务 ({CHROMA_HOST}:{CHROMA_PORT})...")
+        # Initialize knowledge base
+        print(f"[2] Initializing knowledge base service ({CHROMA_HOST}:{CHROMA_PORT})...")
         kb = KnowledgeBase(host=CHROMA_HOST, port=CHROMA_PORT)
 
-        # 清空旧知识库（可选）
-        print("\n🗑️  清空旧知识库...")
+        # Clear old knowledge base
+        print("[3] Clearing old knowledge base...")
         kb.clear_collection()
 
-        # 获取所有表名
+        # Get all table names
         tables = db_service.get_table_names()
-        print(f"📋 发现 {len(tables)} 张表: {', '.join(tables)}")
+        print(f"[4] Found {len(tables)} tables: {', '.join(tables)}")
 
-        # 为每个表构建知识库
+        # Build knowledge base for each table
         for table_name in tables:
-            print(f"\n⚙️  处理表: {table_name}")
+            print(f"\n[5] Processing table: {table_name}")
 
-            # 获取表信息
+            # Get table info
             table_info = db_service.get_table_info(table_name)
             ddl = db_service.get_table_schema(table_name)
 
-            # 添加到知识库
+            # Add to knowledge base
             kb.add_ddl(
                 table_name=table_name,
                 ddl=ddl,
                 columns=table_info['columns'],
-                description=f"包含 {table_info['row_count']} 条记录"
+                description=f"Contains {table_info['row_count']} records"
             )
-            print(f"✅ 已添加 {table_name} ({len(table_info['columns'])} 列, {table_info['row_count']} 行)")
+            print(f"    [OK] Added {table_name} ({len(table_info['columns'])} columns, {table_info['row_count']} rows)")
 
-        # 添加一些 SQL 示例
-        print("\n📝 添加 SQL 示例...")
+        # Add SQL examples
+        print("\n[6] Adding SQL examples...")
         sql_examples = [
             {
-                "question": "查询本月订单总数",
+                "question": "Query order count for current month",
                 "sql": "SELECT COUNT(*) as order_count FROM orders WHERE EXTRACT(MONTH FROM order_date) = EXTRACT(MONTH FROM CURRENT_DATE)",
                 "table": "orders"
             },
             {
-                "question": "各品类的销售额排行",
-                "sql": "SELECT p.category, SUM(oi.quantity * oi.unit_price) as total_sales FROM order_items oi JOIN products p ON oi.product_id = p.product_id GROUP BY p.category ORDER BY total_sales DESC",
+                "question": "Sales ranking by category",
+                "sql": "SELECT p.category, SUM(SI.quantity * SI.unit_price) as total_sales FROM order_items SI JOIN products p ON SI.product_id = p.product_id GROUP BY p.category ORDER BY total_sales DESC",
                 "table": "order_items, products"
             },
             {
-                "question": "好评率最高的前10个产品",
+                "question": "Top 10 products with highest ratings",
                 "sql": "SELECT p.product_name, AVG(r.rating) as avg_rating, COUNT(*) as review_count FROM reviews r JOIN products p ON r.product_id = p.product_id GROUP BY p.product_id, p.product_name HAVING COUNT(*) >= 5 ORDER BY avg_rating DESC LIMIT 10",
                 "table": "reviews, products"
             },
             {
-                "question": "各城市的用户分布",
+                "question": "User distribution by city",
                 "sql": "SELECT city, COUNT(*) as user_count FROM users GROUP BY city ORDER BY user_count DESC",
                 "table": "users"
             }
@@ -84,24 +83,24 @@ def main():
                 sql=example['sql'],
                 table_name=example['table']
             )
-            print(f"✅ 已添加示例: {example['question']}")
+            print(f"    [OK] Added example: {example['question']}")
 
-        # 添加业务术语
-        print("\n📚 添加业务术语...")
+        # Add business terms
+        print("\n[7] Adding business terms...")
         terms = [
             {
-                "term": "客单价",
-                "definition": "平均每笔订单的金额，计算公式为总销售额除以订单数",
+                "term": "Average Order Value (AOV)",
+                "definition": "Average amount per order, calculated as total sales divided by order count",
                 "table": "orders"
             },
             {
-                "term": "复购率",
-                "definition": "重复购买的用户比例，反映用户忠诚度",
+                "term": "Repurchase Rate",
+                "definition": "Percentage of users who made repeat purchases, indicating customer loyalty",
                 "table": "orders, users"
             },
             {
-                "term": "销售额",
-                "definition": "订单金额的总和，反映业务收入",
+                "term": "Sales Revenue",
+                "definition": "Total sum of order amounts, representing business revenue",
                 "table": "order_items"
             }
         ]
@@ -112,25 +111,25 @@ def main():
                 definition=term['definition'],
                 related_table=term['table']
             )
-            print(f"✅ 已添加术语: {term['term']}")
+            print(f"    [OK] Added term: {term['term']}")
 
-        # 显示统计信息
-        print("\n📊 知识库统计:")
+        # Show statistics
+        print("\n[8] Knowledge base statistics:")
         stats = kb.get_stats()
-        print(f"   总数据量: {stats['total']}")
-        print(f"   DDL 文档: {stats['ddl_count']}")
-        print(f"   SQL 示例: {stats['sql_example_count']}")
-        print(f"   业务术语: {stats['business_term_count']}")
+        print(f"    Total documents: {stats['total']}")
+        print(f"    DDL documents: {stats['ddl_count']}")
+        print(f"    SQL examples: {stats['sql_example_count']}")
+        print(f"    Business terms: {stats['business_term_count']}")
 
-        print("\n🎉 知识库构建完成！")
+        print("\n" + "="*60)
+        print("[SUCCESS] Knowledge base construction completed!")
+        print("="*60)
+        print("\nNow you can use the knowledge base for retrieval!")
 
     except Exception as e:
-        print(f"\n❌ 知识库构建失败: {e}")
+        print(f"\n[FAIL] Knowledge base construction failed: {e}")
         import traceback
         traceback.print_exc()
-        return
-
-    print("\n✨ 现在可以使用知识库进行检索了！")
 
 
 if __name__ == "__main__":

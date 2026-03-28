@@ -6,7 +6,9 @@ load_dotenv()
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-DB_URI = os.getenv("DB_URI", "postgresql://postgres:password@localhost:5432/smart_query")
+DB_URI = os.getenv("DB_URI", "postgresql://postgres:password@127.0.0.1:55432/smart_query?client_encoding=utf8")
+
+
 CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

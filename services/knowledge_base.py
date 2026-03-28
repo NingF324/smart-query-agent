@@ -365,8 +365,16 @@ SQL:
         """清空集合"""
         try:
             count = self.collection.count()
-            self.collection.delete(where={})
-            logger.info(f"✅ 已清空集合，删除 {count} 条记录")
+            if count > 0:
+                # Get all IDs and delete them
+                results = self.collection.get()
+                if results and results.get('ids'):
+                    self.collection.delete(ids=results['ids'])
+                    logger.info(f"✅ 已清空集合，删除 {count} 条记录")
+                else:
+                    logger.info("✅ 集合为空，无需清空")
+            else:
+                logger.info("✅ 集合为空，无需清空")
 
         except Exception as e:
             logger.error(f"❌ 清空集合失败: {e}")
