@@ -1,42 +1,42 @@
 """
-Agent State 定义 - LangGraph 状态管理
+Agent State definition - LangGraph state management
 """
 from typing import TypedDict, List, Dict, Any, Optional
-from langchain_core.pydantic import BaseModel
+from pydantic import BaseModel
 
 
 class AgentState(TypedDict):
-    """Agent 状态类型定义"""
+    """Agent state type definition"""
 
-    # 用户输入
-    question: str  # 用户问题
-    messages: List[Dict[str, Any]]  # 消息历史
-    chat_history: List[Dict[str, Any]]  # 多轮对话历史
+    # User input
+    question: str  # User question
+    messages: List[Dict[str, Any]]  # Message history
+    chat_history: List[Dict[str, Any]]  # Multi-turn conversation history
 
-    # 中间结果
-    intent: Dict[str, Any]  # 意图解析结果
-    relevant_schemas: List[Dict[str, Any]]  # 相关表结构
-    generated_sql: str  # 生成的 SQL
-    validation_result: Dict[str, Any]  # SQL 校验结果
-    query_result: List[Dict[str, Any]]  # 查询结果
-    final_answer: str  # 最终答案
+    # Intermediate results
+    intent: Dict[str, Any]  # Intent analysis result
+    relevant_schemas: List[Dict[str, Any]]  # Relevant table schemas
+    generated_sql: str  # Generated SQL
+    validation_result: Dict[str, Any]  # SQL validation result
+    query_result: List[Dict[str, Any]]  # Query result
+    final_answer: str  # Final answer
 
-    # 控制信息
-    retry_count: int  # 重试次数
-    max_retries: int  # 最大重试次数
-    error_type: Optional[str]  # 错误类型
+    # Control information
+    retry_count: int  # Retry count
+    max_retries: int  # Maximum retry count
+    error_type: Optional[str]  # Error type
 
 
 def create_initial_state(question: str, chat_history: Optional[List[Dict[str, Any]]] = None) -> AgentState:
     """
-    创建初始状态
+    Create initial state
 
     Args:
-        question: 用户问题
-        chat_history: 历史对话（可选）
+        question: User question
+        chat_history: Conversation history (optional)
 
     Returns:
-        AgentState: 初始状态
+        AgentState: Initial state
     """
     return AgentState({
         "question": question,
@@ -56,27 +56,27 @@ def create_initial_state(question: str, chat_history: Optional[List[Dict[str, An
 
 # Field mappings for semantic mapping
 FIELD_MAPPINGS = {
-    # 时间字段映射
+    # Time field mappings
     "本月": "EXTRACT(MONTH FROM order_date) = EXTRACT(MONTH FROM CURRENT_DATE)",
     "上月": "order_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') AND order_date < DATE_TRUNC('month', CURRENT_DATE)",
     "今年": "EXTRACT(YEAR FROM order_date) = EXTRACT(YEAR FROM CURRENT_DATE)",
     "最近30天": "order_date >= CURRENT_DATE - INTERVAL '30 days'",
-    "最近7天": "order_date >= CURRENT_DATE - INTERVAL '7 days'",
+    "最近7天": "order_date >= CURRENT_DATE - INTERVAL '7 days')",
 
-    # 业务术语映射
+    # Business term mappings
     "销售额": "SUM(quantity * unit_price)",
     "订单数": "COUNT(*)",
     "客单价": "AVG(total_amount)",
     "复购率": "复购用户数 / 总用户数",
 
-    # 表名映射
+    # Table name mappings
     "订单": "orders",
     "订单明细": "order_items",
     "产品": "products",
     "用户": "users",
     "评价": "reviews",
 
-    # 字段名映射
+    # Column name mappings
     "商品名称": "product_name",
     "品类": "category",
     "单价": "unit_price",
@@ -87,12 +87,12 @@ FIELD_MAPPINGS = {
 
 def get_field_mapping(field_name: str) -> Optional[str]:
     """
-    获取字段映射
+    Get field mapping
 
     Args:
-        field_name: 字段名（中文或英文）
+        field_name: Field name (Chinese or English)
 
     Returns:
-        Optional[str]: 映射后的表达式或字段名
+        Optional[str]: Mapped expression or field name
     """
     return FIELD_MAPPINGS.get(field_name, None)
