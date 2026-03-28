@@ -10,6 +10,7 @@ langchain-community>=0.3.0
 
 # LLM
 openai>=1.50.0
+langchain-openai>=0.2.0
 
 # Embedding
 sentence-transformers>=3.0.0
