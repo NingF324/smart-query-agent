@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd \"D:\\\\GraduationProject\" && docker-compose up -d --build)",
+      "Bash(docker --version)",
+      "Bash(cd \"D:\\\\GraduationProject\" && docker-compose up -d db chromadb)",
+      "Bash(cd \"D:\\\\GraduationProject\" && docker-compose down chromadb)",
+      "Bash(docker stop chromadb-test && docker rm chromadb-test)"
+    ]
+  }
+}
