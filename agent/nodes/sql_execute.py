@@ -4,7 +4,8 @@ SQL 执行节点 - 执行 SQL 并处理超时和错误
 import logging
 from typing import Dict, Any
 from agent.state import AgentState
-from services.db_service import DatabaseService
+from services.db_service import get_db_service
+
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -41,7 +42,8 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         # 初始化数据库服务
-        db_service = DatabaseService()
+        db_service = get_db_service()
+
 
         # 执行查询（自动带超时控制）
         result = db_service.execute_query(generated_sql)

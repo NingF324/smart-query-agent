@@ -390,8 +390,10 @@ def get_db_service(db_uri: Optional[str] = None) -> DatabaseService:
 
     if _db_service_instance is None:
         if not db_uri:
-            db_uri = os.getenv("DB_URI", "sqlite:///./data/ecommerce.db")
+            from config import DB_URI
+            db_uri = DB_URI
 
         _db_service_instance = DatabaseService(db_uri)
+
 
     return _db_service_instance

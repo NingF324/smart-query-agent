@@ -5,7 +5,8 @@ import logging
 from typing import Dict, Any, List
 from agent.state import AgentState
 from services.knowledge_base import KnowledgeBase
-from services.db_service import DatabaseService
+from services.db_service import get_db_service
+
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -29,9 +30,9 @@ def schema_retrieve_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         # 初始化知识库和数据库服务
-        # TODO: 从单例获取服务
         kb = KnowledgeBase()
-        db_service = DatabaseService()
+        db_service = get_db_service()
+
 
         # 构建搜索查询
         search_query = question

@@ -5,7 +5,8 @@ import logging
 import re
 from typing import Dict, Any
 from agent.state import AgentState
-from services.db_service import DatabaseService
+from services.db_service import get_db_service
+
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -41,7 +42,8 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         # 初始化数据库服务
-        db_service = DatabaseService()
+        db_service = get_db_service()
+
 
         # 第一步：安全检查
         is_safe, safety_error = db_service.is_safe_sql(generated_sql)
