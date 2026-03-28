@@ -95,13 +95,14 @@ def should_retry_sql(state: AgentState) -> str:
     if is_valid:
         return NODE_SQL_EXECUTE
 
-    if error_type == "execution_error" and retry_count < max_retries:
+    if error_type == "fixable" and retry_count < max_retries:
         state["retry_count"] = retry_count + 1
-        logger.info("[Route] Execution error detected, retrying SQL generation")
+        logger.info("[Route] Fixable validation error detected, retrying SQL generation")
         return NODE_SQL_GENERATE
 
     logger.info("[Route] Validation failed, proceeding to result interpretation")
     return NODE_RESULT_INTERPRET
+
 
 
 def get_graph_info() -> GraphInfo:
@@ -160,8 +161,9 @@ def print_graph_flow():
     print("\nConditional Routing:")
     print(f"  From {NODE_SQL_VALIDATE}:")
     print(f"    - valid -> {NODE_SQL_EXECUTE}")
-    print(f"    - execution_error_with_retry -> {NODE_SQL_GENERATE}")
+    print(f"    - fixable_with_retry -> {NODE_SQL_GENERATE}")
     print(f"    - other -> {NODE_RESULT_INTERPRET}")
+
 
     print("\n" + "=" * 60)
 
