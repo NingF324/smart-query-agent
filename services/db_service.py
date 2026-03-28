@@ -22,20 +22,19 @@ class DatabaseService:
 
     # SQL 注入防护正则表达式
     DANGEROUS_PATTERNS = [
-        r'--',                    # SQL 注释
-        r'/\*.*?\*/',            # 多行注释
-        r';\s*(\w+)',            # 多语句执行
-        r'xp_cmdshell',           # SQL Server 命令执行
-        r'exec\s*\(',            # 执行语句
-        r'eval\s*\(',            # 评估语句
-        r'drop\s+',              # 删除操作
-        r'delete\s+',            # 删除操作
-        r'truncate\s+',          # 清空表
-        r'alter\s+',             # 修改表
-        r'insert\s+',            # 插入操作（除了 INSERT INTO SELECT）
-        r'update\s+.+?set',      # 更新操作
-        r'grant\s+',             # 权限授予
-        r'revoke\s+',            # 权限撤销
+        r'--',
+        r'/\*.*?\*/',
+        r'xp_cmdshell',
+        r'exec\s*\(',
+        r'eval\s*\(',
+        r'\bdrop\b',
+        r'\bdelete\b',
+        r'\btruncate\b',
+        r'\balter\b',
+        r'\binsert\b',
+        r'\bupdate\b',
+        r'\bgrant\b',
+        r'\brevoke\b',
     ]
 
     def __init__(self,
@@ -101,15 +100,17 @@ class DatabaseService:
         if not sql or not sql.strip():
             return False, "SQL 语句为空"
 
-        sql_lower = sql.lower().strip()
+        normalized_sql = sql.strip()
+        sql_lower = normalized_sql.lower()
 
-        # 只允许 SELECT 查询
         if not sql_lower.startswith('select'):
             return False, "只允许 SELECT 查询"
 
-        # 检查危险模式
+        if ';' in normalized_sql:
+            return False, "检测到危险 SQL 模式: 禁止使用分号或多语句"
+
         for pattern in self.DANGEROUS_PATTERNS:
-            if re.search(pattern, sql_lower, re.IGNORECASE):
+            if re.search(pattern, sql_lower, re.IGNORECASE | re.DOTALL):
                 return False, f"检测到危险 SQL 模式: {pattern}"
 
         return True, None
@@ -186,7 +187,7 @@ class DatabaseService:
             with self.engine.connect() as conn:
                 # 检测数据库类型
                 if 'postgresql' in self.db_uri:
-                    explain_sql = f"EXPLAIN ANALYZE {sql}"
+                    explain_sql = f"EXPLAIN {sql}"
                     result = conn.execute(text(explain_sql))
                 else:
                     explain_sql = f"EXPLAIN QUERY PLAN {sql}"

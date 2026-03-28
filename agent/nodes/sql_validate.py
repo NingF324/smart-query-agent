@@ -257,6 +257,8 @@ def classify_error(error: str) -> str:
     unfixable_patterns = [
         r"permission denied",
         r"syntax error",
+        r"relation .* does not exist",
+        r"table .* does not exist",
         r"只允许 select 查询",
         r"检测到危险 sql 模式",
         r"sql 语句为空",
@@ -271,8 +273,6 @@ def classify_error(error: str) -> str:
         r"missing from-clause entry",
         r"operator does not exist",
         r"ambiguous column",
-        r"relation .* does not exist",
-        r"table .* does not exist",
     ]
     for pattern in fixable_patterns:
         if re.search(pattern, error_lower, re.IGNORECASE):
