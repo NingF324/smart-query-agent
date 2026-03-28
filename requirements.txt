@@ -1,7 +1,7 @@
-# Web 框架
+# Web Framework
 streamlit>=1.40.0
 
-# Agent 编排
+# Agent Orchestration
 langgraph>=0.2.0
 langchain>=0.3.0
 langchain-core>=0.3.0
@@ -16,19 +16,19 @@ langchain-openai>=0.2.0
 sentence-transformers>=3.0.0
 torch>=2.0.0
 
-# 向量数据库
+# Vector Database
 chromadb>=0.5.0
 
-# 数据库
+# Database
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
 
-# 数据处理
+# Data Processing
 pandas>=2.0.0
 numpy>=1.24.0
 
-# 可视化
+# Visualization
 plotly>=5.0.0
 
-# 工具
+# Utils
 python-dotenv>=1.0.0

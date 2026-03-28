@@ -441,7 +441,6 @@ def get_knowledge_base(host: Optional[str] = None,
     global _knowledge_base_instance
 
     if _knowledge_base_instance is None:
-:
         _knowledge_base_instance = KnowledgeBase(
             host=host,
             port=port
