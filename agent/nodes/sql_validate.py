@@ -25,11 +25,22 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
     generated_sql = state.get("generated_sql", "")
     schemas = state.get("relevant_schemas", [])
     question = state["question"]
+    execution_stats = dict(state.get("execution_stats", {}))
 
     logger.info(f"[SQL Validate] Validating SQL: {generated_sql[:100]}...")
 
     if not generated_sql:
         logger.warning("[SQL Validate] No SQL to validate")
+        execution_stats.update({
+            "validation_attempted": True,
+            "validation_passed": False,
+            "validation_type": "empty",
+            "fix_attempted": False,
+            "fix_success": False,
+            "fix_strategy": "",
+            "safety_blocked": False,
+            "initial_error": "No SQL generated",
+        })
         return {
             "validation_result": {
                 "valid": False,
@@ -38,6 +49,7 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
                 "validation_type": "empty",
             },
             "error_type": "unfixable",
+            "execution_stats": execution_stats,
             "messages": state["messages"],
         }
 
@@ -47,6 +59,16 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
         is_safe, safety_error = db_service.is_safe_sql(generated_sql)
         if not is_safe:
             logger.warning(f"[SQL Validate] SQL failed safety check: {safety_error}")
+            execution_stats.update({
+                "validation_attempted": True,
+                "validation_passed": False,
+                "validation_type": "security",
+                "fix_attempted": False,
+                "fix_success": False,
+                "fix_strategy": "",
+                "safety_blocked": True,
+                "initial_error": safety_error,
+            })
             return {
                 "generated_sql": generated_sql,
                 "validation_result": {
@@ -56,12 +78,23 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
                     "validation_type": "security",
                 },
                 "error_type": "unfixable",
+                "execution_stats": execution_stats,
                 "messages": state["messages"],
             }
 
         explain_result = db_service.explain_query(generated_sql)
         if explain_result["valid"]:
             logger.info("[SQL Validate] SQL validation passed")
+            execution_stats.update({
+                "validation_attempted": True,
+                "validation_passed": True,
+                "validation_type": "explain",
+                "fix_attempted": False,
+                "fix_success": False,
+                "fix_strategy": "",
+                "safety_blocked": False,
+                "initial_error": "",
+            })
             return {
                 "generated_sql": generated_sql,
                 "validation_result": {
@@ -72,6 +105,7 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
                     "explain": explain_result.get("explain", [])[:3],
                 },
                 "error_type": None,
+                "execution_stats": execution_stats,
                 "messages": state["messages"],
             }
 
@@ -80,6 +114,16 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
         logger.warning(f"[SQL Validate] EXPLAIN failed: {error_msg}")
 
         if error_type == "unfixable":
+            execution_stats.update({
+                "validation_attempted": True,
+                "validation_passed": False,
+                "validation_type": "explain",
+                "fix_attempted": False,
+                "fix_success": False,
+                "fix_strategy": "",
+                "safety_blocked": False,
+                "initial_error": error_msg,
+            })
             return {
                 "generated_sql": generated_sql,
                 "validation_result": {
@@ -89,12 +133,23 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
                     "validation_type": "explain",
                 },
                 "error_type": error_type,
+                "execution_stats": execution_stats,
                 "messages": state["messages"],
             }
 
         fixed_sql, fix_strategy = attempt_sql_fix(generated_sql, question, schemas, error_msg)
         if not fixed_sql or fixed_sql.strip() == generated_sql.strip():
             logger.warning("[SQL Validate] No effective SQL fix generated")
+            execution_stats.update({
+                "validation_attempted": True,
+                "validation_passed": False,
+                "validation_type": "fix_skipped",
+                "fix_attempted": True,
+                "fix_success": False,
+                "fix_strategy": "not_fixed",
+                "safety_blocked": False,
+                "initial_error": error_msg,
+            })
             return {
                 "generated_sql": generated_sql,
                 "validation_result": {
@@ -104,12 +159,23 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
                     "validation_type": "fix_skipped",
                 },
                 "error_type": "fixable",
+                "execution_stats": execution_stats,
                 "messages": state["messages"],
             }
 
         fixed_safe, fixed_safety_error = db_service.is_safe_sql(fixed_sql)
         if not fixed_safe:
             logger.warning(f"[SQL Validate] Fixed SQL is unsafe: {fixed_safety_error}")
+            execution_stats.update({
+                "validation_attempted": True,
+                "validation_passed": False,
+                "validation_type": "security",
+                "fix_attempted": True,
+                "fix_success": False,
+                "fix_strategy": fix_strategy,
+                "safety_blocked": True,
+                "initial_error": error_msg,
+            })
             return {
                 "generated_sql": generated_sql,
                 "validation_result": {
@@ -119,12 +185,23 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
                     "validation_type": "security",
                 },
                 "error_type": "unfixable",
+                "execution_stats": execution_stats,
                 "messages": state["messages"],
             }
 
         verify_result = db_service.explain_query(fixed_sql)
         if verify_result["valid"]:
             logger.info(f"[SQL Validate] SQL fixed successfully via {fix_strategy}")
+            execution_stats.update({
+                "validation_attempted": True,
+                "validation_passed": True,
+                "validation_type": fix_strategy,
+                "fix_attempted": True,
+                "fix_success": True,
+                "fix_strategy": fix_strategy,
+                "safety_blocked": False,
+                "initial_error": error_msg,
+            })
             return {
                 "generated_sql": fixed_sql,
                 "validation_result": {
@@ -135,11 +212,22 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
                     "explain": verify_result.get("explain", [])[:3],
                 },
                 "error_type": None,
+                "execution_stats": execution_stats,
                 "messages": state["messages"],
             }
 
         verify_error = verify_result.get("error", "SQL fix verification failed")
         logger.warning(f"[SQL Validate] Fixed SQL still invalid: {verify_error}")
+        execution_stats.update({
+            "validation_attempted": True,
+            "validation_passed": False,
+            "validation_type": f"{fix_strategy}_failed",
+            "fix_attempted": True,
+            "fix_success": False,
+            "fix_strategy": fix_strategy,
+            "safety_blocked": False,
+            "initial_error": error_msg,
+        })
         return {
             "generated_sql": fixed_sql,
             "validation_result": {
@@ -149,11 +237,22 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
                 "validation_type": f"{fix_strategy}_failed",
             },
             "error_type": "fixable",
+            "execution_stats": execution_stats,
             "messages": state["messages"],
         }
 
     except Exception as e:
         logger.error(f"[SQL Validate] Validation error: {e}")
+        execution_stats.update({
+            "validation_attempted": True,
+            "validation_passed": False,
+            "validation_type": "exception",
+            "fix_attempted": False,
+            "fix_success": False,
+            "fix_strategy": "",
+            "safety_blocked": False,
+            "initial_error": str(e),
+        })
         return {
             "generated_sql": generated_sql,
             "validation_result": {
@@ -163,8 +262,11 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
                 "validation_type": "exception",
             },
             "error_type": "unfixable",
+            "execution_stats": execution_stats,
             "messages": state["messages"],
         }
+
+
 
 
 def attempt_sql_fix(sql: str, question: str, schemas: list, error: str) -> Tuple[str, str]:
@@ -270,9 +372,12 @@ def classify_error(error: str) -> str:
 
     fixable_patterns = [
         r"column .* does not exist",
+        r"relation .* does not exist",
+        r"table .* does not exist",
         r"missing from-clause entry",
         r"operator does not exist",
         r"ambiguous column",
+
     ]
     for pattern in fixable_patterns:
         if re.search(pattern, error_lower, re.IGNORECASE):

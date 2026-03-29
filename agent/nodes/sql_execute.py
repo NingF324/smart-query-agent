@@ -24,12 +24,18 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
     """
     generated_sql = state.get("generated_sql", "")
     question = state["question"]
+    execution_stats = dict(state.get("execution_stats", {}))
 
     logger.info(f"[SQL Execute] Executing SQL: {generated_sql[:100]}...")
 
+
     if not generated_sql:
         logger.warning("[SQL Execute] No SQL to execute")
-
+        execution_stats.update({
+            "execution_attempted": False,
+            "execution_success": False,
+            "execution_error": "No SQL generated",
+        })
         return {
             "query_result": [],
             "validation_result": {
@@ -37,8 +43,10 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
                 "error": "No SQL generated"
             },
             "error_type": "no_sql",
+            "execution_stats": execution_stats,
             "messages": state["messages"]
         }
+
 
     try:
         # 初始化数据库服务
@@ -50,19 +58,31 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
 
         logger.info(f"[SQL Execute] Query executed successfully, returned {len(result)} rows")
 
+        execution_stats.update({
+            "execution_attempted": True,
+            "execution_success": True,
+            "execution_error": "",
+        })
         return {
             "query_result": result,
             "validation_result": {
                 "valid": True
             },
             "error_type": None,
+            "execution_stats": execution_stats,
             "messages": state["messages"]
         }
+
 
     except ValueError as e:
         # SQL 不安全的错误
         logger.warning(f"[SQL Execute] Safety error: {e}")
 
+        execution_stats.update({
+            "execution_attempted": True,
+            "execution_success": False,
+            "execution_error": str(e),
+        })
         return {
             "query_result": [],
             "validation_result": {
@@ -70,13 +90,20 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
                 "error": str(e)
             },
             "error_type": "permission_error",  # 不可修复
+            "execution_stats": execution_stats,
             "messages": state["messages"]
         }
+
 
     except TimeoutError as e:
         # 超时错误
         logger.warning(f"[SQL Execute] Query timeout: {e}")
 
+        execution_stats.update({
+            "execution_attempted": True,
+            "execution_success": False,
+            "execution_error": f"Query timeout: {e}",
+        })
         return {
             "query_result": [],
             "validation_result": {
@@ -84,13 +111,20 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
                 "error": f"Query timeout: {e}"
             },
             "error_type": "execution_error",  # 可重试
+            "execution_stats": execution_stats,
             "messages": state["messages"]
         }
+
 
     except Exception as e:
         # 其他执行错误
         logger.warning(f"[SQL Execute] Query execution error: {e}")
 
+        execution_stats.update({
+            "execution_attempted": True,
+            "execution_success": False,
+            "execution_error": str(e),
+        })
         return {
             "query_result": [],
             "validation_result": {
@@ -98,8 +132,10 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
                 "error": str(e)
             },
             "error_type": "execution_error",  # 可重试
+            "execution_stats": execution_stats,
             "messages": state["messages"]
         }
+
 
 
 def format_results(query_result: list) -> str:

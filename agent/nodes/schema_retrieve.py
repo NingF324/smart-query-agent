@@ -24,9 +24,11 @@ def schema_retrieve_node(state: AgentState) -> Dict[str, Any]:
         Dict[str, Any]: 更新后的状态
     """
     question = state["question"]
+    resolved_question = state.get("resolved_question") or question
     intent = state.get("intent", {})
 
-    logger.info(f"[Schema Retrieve] Retrieving schemas for question: {question}")
+    logger.info(f"[Schema Retrieve] Retrieving schemas for question: {resolved_question}")
+
 
     try:
         # 初始化知识库和数据库服务
@@ -35,7 +37,8 @@ def schema_retrieve_node(state: AgentState) -> Dict[str, Any]:
 
 
         # 构建搜索查询
-        search_query = question
+        search_query = resolved_question
+
 
         # 如果意图中包含实体，添加到搜索查询
         entities = intent.get("entities", [])

@@ -23,6 +23,8 @@ class AgentState(TypedDict):
     retry_count: int
     max_retries: int
     error_type: Optional[str]
+    execution_stats: Dict[str, Any]
+
 
 
 def create_initial_state(question: str, chat_history: Optional[List[Dict[str, Any]]] = None) -> AgentState:
@@ -42,7 +44,9 @@ def create_initial_state(question: str, chat_history: Optional[List[Dict[str, An
         "retry_count": 0,
         "max_retries": 3,
         "error_type": None,
+        "execution_stats": {},
     })
+
 
 
 FIELD_MAPPINGS = {
@@ -50,11 +54,12 @@ FIELD_MAPPINGS = {
     "上月": "order_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') AND order_date < DATE_TRUNC('month', CURRENT_DATE)",
     "今年": "EXTRACT(YEAR FROM order_date) = EXTRACT(YEAR FROM CURRENT_DATE)",
     "最近30天": "order_date >= CURRENT_DATE - INTERVAL '30 days'",
-    "最近7天": "order_date >= CURRENT_DATE - INTERVAL '7 days')",
+    "最近7天": "order_date >= CURRENT_DATE - INTERVAL '7 days'",
     "销售额": "SUM(quantity * unit_price)",
     "订单数": "COUNT(*)",
     "客单价": "AVG(total_amount)",
-    "复购率": "复购用户数 / 总用户数",
+    "复购率": "COUNT(DISTINCT CASE WHEN user_order_count > 1 THEN user_id END)::DECIMAL / NULLIF(COUNT(DISTINCT user_id), 0)",
+
     "订单": "orders",
     "订单明细": "order_items",
     "产品": "products",
