@@ -6,7 +6,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import DB_URI
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 def main():
     """执行种子数据 SQL"""
@@ -28,7 +28,7 @@ def main():
     with engine.connect() as conn:
         for i, stmt in enumerate(statements, 1):
             try:
-                conn.execute(stmt)
+                conn.execute(text(stmt))
                 conn.commit()
                 if i % 10 == 0:
                     print(f"✅ 已执行 {i} 条语句")
