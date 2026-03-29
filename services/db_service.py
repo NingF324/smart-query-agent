@@ -103,8 +103,9 @@ class DatabaseService:
         normalized_sql = sql.strip()
         sql_lower = normalized_sql.lower()
 
-        if not sql_lower.startswith('select'):
-            return False, "只允许 SELECT 查询"
+        if not (sql_lower.startswith('select') or sql_lower.startswith('with')):
+            return False, "只允许 SELECT/CTE 查询"
+
 
         if ';' in normalized_sql:
             return False, "检测到危险 SQL 模式: 禁止使用分号或多语句"

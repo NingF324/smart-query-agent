@@ -31,6 +31,7 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
 
     if not generated_sql:
         logger.warning("[SQL Validate] No SQL to validate")
+        no_sql_error = state.get("validation_result", {}).get("error", "No SQL generated")
         execution_stats.update({
             "validation_attempted": True,
             "validation_passed": False,
@@ -39,12 +40,12 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
             "fix_success": False,
             "fix_strategy": "",
             "safety_blocked": False,
-            "initial_error": "No SQL generated",
+            "initial_error": no_sql_error,
         })
         return {
             "validation_result": {
                 "valid": False,
-                "error": "No SQL generated",
+                "error": no_sql_error,
                 "corrected_sql": None,
                 "validation_type": "empty",
             },
@@ -52,6 +53,7 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
             "execution_stats": execution_stats,
             "messages": state["messages"],
         }
+
 
     try:
         db_service = get_db_service()

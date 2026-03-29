@@ -74,8 +74,10 @@ def run_single_agent_baseline(question: str, chat_history: Optional[List[Dict[st
         generated_sql = generate_sql_with_rules(question, intent, schemas)
 
     generated_sql = (generated_sql or "").strip()
-    if not generated_sql or not generated_sql.lower().startswith("select"):
+    normalized_sql = generated_sql.lower()
+    if not generated_sql or not (normalized_sql.startswith("select") or normalized_sql.startswith("with")):
         generated_sql = generate_sql_with_rules(question, intent, schemas)
+
 
     validation_result: Dict[str, Any]
     query_result: List[Dict[str, Any]] = []

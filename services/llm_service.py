@@ -5,7 +5,12 @@ LLM 服务模块 - 统一管理 DeepSeek API 调用
 import os
 import logging
 from typing import Optional, Dict, Any, List
+
+from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
+
+load_dotenv()
+
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)

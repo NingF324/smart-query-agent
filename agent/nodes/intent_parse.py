@@ -49,6 +49,8 @@ def intent_parse_node(state: AgentState) -> Dict[str, Any]:
 
 def detect_query_type(question: str) -> str:
     """分析查询类型。"""
+    if any(keyword in question for keyword in ["复购率", "复购"]):
+        return "repurchase_rate"
     if any(keyword in question for keyword in ["总数", "数量", "多少"]):
         return "count"
     if any(keyword in question for keyword in ["排行", "最高", "最低", "前", "Top", "top"]):
@@ -58,6 +60,7 @@ def detect_query_type(question: str) -> str:
     if any(keyword in question for keyword in ["趋势", "变化", "增长", "下降"]):
         return "trend"
     return "unknown"
+
 
 
 

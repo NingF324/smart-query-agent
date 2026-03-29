@@ -1,7 +1,10 @@
 """Streamlit 应用入口"""
+from typing import Any
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+
 
 from agent.graph import build_graph
 from agent.state import create_initial_state
@@ -84,7 +87,8 @@ def queue_question(question: str):
 
 
 
-def render_message(message: dict):
+def render_message(message: dict[str, Any], message_index: int):
+
     """渲染单条消息。"""
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -103,9 +107,10 @@ def render_message(message: dict):
                 chart_question = message.get("resolved_question") or message.get("question") or message["content"]
                 fig = auto_generate_chart(df, chart_question)
                 if fig:
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key=f"plotly_chart_{message_index}")
                 else:
                     st.info("当前数据不适合图表展示")
+
 
 
 
@@ -117,7 +122,8 @@ def process_query(question: str):
     agent_history = get_recent_chat_history(st.session_state.chat_history, max_turns=5)
     initial_state = create_initial_state(question, chat_history=agent_history)
 
-    render_message(user_message)
+    render_message(user_message, len(st.session_state.messages) - 1)
+
 
     with st.spinner("🤔 正在分析您的问题..."):
         try:
@@ -126,13 +132,15 @@ def process_query(question: str):
             st.session_state.messages.append(assistant_message)
             st.session_state.chat_history.extend([user_message, assistant_message])
             st.session_state.chat_history = get_recent_chat_history(st.session_state.chat_history, max_turns=10)
-            render_message(assistant_message)
+            render_message(assistant_message, len(st.session_state.messages) - 1)
+
         except Exception as e:
             error_message = {"role": "assistant", "content": f"处理失败：{str(e)}"}
             st.session_state.messages.append(error_message)
             st.session_state.chat_history.extend([user_message, error_message])
             st.session_state.chat_history = get_recent_chat_history(st.session_state.chat_history, max_turns=10)
-            render_message(error_message)
+            render_message(error_message, len(st.session_state.messages) - 1)
+
 
 
 
@@ -176,8 +184,9 @@ def main():
             st.session_state.pending_question = None
             st.rerun()
 
-    for message in st.session_state.get("messages", []):
-        render_message(message)
+    for idx, message in enumerate(st.session_state.get("messages", [])):
+        render_message(message, idx)
+
 
     if prompt := st.chat_input("输入您的数据问题...", key="chat_input"):
         queue_question(prompt)
