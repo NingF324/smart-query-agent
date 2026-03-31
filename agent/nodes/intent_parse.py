@@ -2,7 +2,7 @@
 意图解析节点 - 理解用户查询意图，提取关键信息
 """
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from agent.state import AgentState
 from services.conversation_service import extract_limit, extract_time_range, resolve_question_with_history
@@ -62,8 +62,6 @@ def detect_query_type(question: str) -> str:
     return "unknown"
 
 
-
-
 def extract_entities(question: str) -> List[str]:
     """提取实体关键词。"""
     entities: List[str] = []
@@ -74,20 +72,4 @@ def extract_entities(question: str) -> List[str]:
 
 
 
-def extract_entities_from_llm(question: str) -> Dict[str, Any]:
-    """使用 LLM 提取实体（高级功能占位）。"""
-    return {
-        "tables": [],
-        "fields": [],
-        "conditions": [],
-    }
 
-
-
-def validate_intent(intent: Dict[str, Any]) -> bool:
-    """验证意图是否有效。"""
-    if not intent.get("query_type"):
-        logger.warning(f"[Intent Parse] Missing query_type in intent: {intent}")
-        return False
-
-    return True

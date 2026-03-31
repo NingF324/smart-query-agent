@@ -2,10 +2,9 @@
 数据库服务模块 - 封装数据库连接、查询和安全校验
 支持 PostgreSQL 和 SQLite
 """
-import os
 import logging
 import re
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, Optional
 from contextlib import contextmanager
 import threading
 from sqlalchemy import create_engine, text, inspect
@@ -152,6 +151,9 @@ class DatabaseService:
                 if 'postgresql' in self.db_uri:
                     # PostgreSQL 超时设置
                     conn.execute(text(f"SET statement_timeout TO {timeout * 1000}"))
+                elif 'sqlite' in self.db_uri:
+                    # SQLite 通过 PRAGMA 设置超时（毫秒）
+                    conn.execute(text(f"PRAGMA busy_timeout = {timeout * 1000}"))
 
                 # 执行查询
                 result = conn.execute(text(sql), params or {})
@@ -187,11 +189,14 @@ class DatabaseService:
         try:
             with self.engine.connect() as conn:
                 # 检测数据库类型
-                if 'postgresql' in self.db_uri:
+                if 'sqlite' in self.db_uri:
+                    explain_sql = f"EXPLAIN QUERY PLAN {sql}"
+                    result = conn.execute(text(explain_sql))
+                elif 'postgresql' in self.db_uri:
                     explain_sql = f"EXPLAIN {sql}"
                     result = conn.execute(text(explain_sql))
                 else:
-                    explain_sql = f"EXPLAIN QUERY PLAN {sql}"
+                    explain_sql = f"EXPLAIN {sql}"
                     result = conn.execute(text(explain_sql))
 
                 # 收集执行计划
@@ -283,7 +288,7 @@ class DatabaseService:
                     "type": str(col['type']),
                     "nullable": col['nullable'],
                     "default": col['default'],
-                    "autoincrement": col['autoincrement']
+                    "autoincrement": col.get('autoincrement', False)
                 })
 
             # 获取主键
@@ -376,6 +381,26 @@ class DatabaseService:
 
 # 创建全局单例
 _db_service_instance: Optional[DatabaseService] = None
+
+
+# URI-based service cache (for multi-database scenarios like Spider tests)
+_db_service_cache: Dict[str, DatabaseService] = {}
+
+
+def get_state_db_service(state) -> DatabaseService:
+    """根据 state 中的 db_uri 获取或创建 DatabaseService。
+
+    当 state 包含特定的 db_uri 时，按 URI 缓存独立的数据库实例；
+    否则回退到默认全局单例。
+    """
+    db_uri = state.get("db_uri") if hasattr(state, "get") else None
+    if not db_uri:
+        return get_db_service()
+
+    if db_uri not in _db_service_cache:
+        _db_service_cache[db_uri] = DatabaseService(db_uri)
+
+    return _db_service_cache[db_uri]
 
 
 def get_db_service(db_uri: Optional[str] = None) -> DatabaseService:

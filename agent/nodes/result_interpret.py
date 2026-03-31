@@ -5,7 +5,6 @@ import logging
 from typing import Any, Dict, List
 
 from agent.state import AgentState
-from config import DEEPSEEK_API_KEY
 from services.llm_service import get_llm_service
 
 
@@ -60,9 +59,6 @@ def result_interpret_node(state: AgentState) -> Dict[str, Any]:
 
 def try_llm_interpret(question: str, sql: str, results: List[Dict[str, Any]]) -> str:
     """优先使用 LLM 解释结果，失败时返回空字符串。"""
-    if not DEEPSEEK_API_KEY:
-        return ""
-
     try:
         llm = get_llm_service()
         response = llm.interpret_result(question=question, sql=sql, result=results)
@@ -125,25 +121,5 @@ def build_result_details(results: List[Dict[str, Any]], sql: str, count: int) ->
     return "\n".join(details)
 
 
-def is_successful_result(validation_result: Dict[str, Any]) -> bool:
-    """判断是否是成功的查询结果。"""
-    if not validation_result:
-        return False
-
-    return validation_result.get("valid", False)
 
 
-def get_result_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """获取结果摘要信息。"""
-    if not results:
-        return {
-            "count": 0,
-            "has_data": False,
-            "columns": [],
-        }
-
-    return {
-        "count": len(results),
-        "has_data": True,
-        "columns": list(results[0].keys()),
-    }

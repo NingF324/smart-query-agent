@@ -8,8 +8,7 @@ from typing import Any, Dict, List, Tuple
 
 from agent.state import AgentState
 from agent.nodes.sql_generate import build_schema_description, extract_sql_from_llm_response
-from config import DEEPSEEK_API_KEY
-from services.db_service import get_db_service
+from services.db_service import get_state_db_service
 from services.llm_service import get_llm_service
 
 
@@ -56,7 +55,7 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
 
 
     try:
-        db_service = get_db_service()
+        db_service = get_state_db_service(state)
 
         is_safe, safety_error = db_service.is_safe_sql(generated_sql)
         if not is_safe:
@@ -276,9 +275,6 @@ def attempt_sql_fix(sql: str, question: str, schemas: list, error: str) -> Tuple
     schema_text = build_schema_description(schemas)
 
     try:
-        if not DEEPSEEK_API_KEY:
-            raise ValueError("DEEPSEEK_API_KEY 未设置")
-
         llm = get_llm_service()
         response = llm.validate_and_fix_sql(
             schemas=schema_text,
@@ -360,9 +356,6 @@ def classify_error(error: str) -> str:
 
     unfixable_patterns = [
         r"permission denied",
-        r"syntax error",
-        r"relation .* does not exist",
-        r"table .* does not exist",
         r"只允许 select 查询",
         r"检测到危险 sql 模式",
         r"sql 语句为空",
@@ -373,13 +366,13 @@ def classify_error(error: str) -> str:
             return "unfixable"
 
     fixable_patterns = [
+        r"syntax error",
         r"column .* does not exist",
         r"relation .* does not exist",
         r"table .* does not exist",
         r"missing from-clause entry",
         r"operator does not exist",
         r"ambiguous column",
-
     ]
     for pattern in fixable_patterns:
         if re.search(pattern, error_lower, re.IGNORECASE):

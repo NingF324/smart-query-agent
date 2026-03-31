@@ -4,7 +4,7 @@ SQL 执行节点 - 执行 SQL 并处理超时和错误
 import logging
 from typing import Dict, Any
 from agent.state import AgentState
-from services.db_service import get_db_service
+from services.db_service import get_state_db_service
 
 
 # 配置日志
@@ -50,7 +50,7 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         # 初始化数据库服务
-        db_service = get_db_service()
+        db_service = get_state_db_service(state)
 
 
         # 执行查询（自动带超时控制）
@@ -138,41 +138,5 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
 
 
 
-def format_results(query_result: list) -> str:
-    """
-    格式化查询结果
-
-    Args:
-        query_result: 查询结果列表
-
-    Returns:
-        str: 格式化后的文本
-    """
-    if not query_result:
-        return "查询成功，但没有返回结果"
-
-    result_count = len(query_result)
-    result_text = f"查询成功，返回 {result_count} 条记录：\n\n"
-
-    # 只显示前 10 条
-    display_count = min(result_count, 10)
-    for i, row in enumerate(query_result[:display_count], 1):
-        result_text += f"{i}. {row}\n"
-
-    if result_count > 10:
-        result_text += f"\n... 还有 {result_count - 10} 条记录未显示"
-
-    return result_text
 
 
-def is_empty_result(query_result: list) -> bool:
-    """
-    判断结果是否为空
-
-    Args:
-        query_result: 查询结果列表
-
-    Returns:
-        bool: 是否为空
-    """
-    return not query_result or len(query_result) == 0
