@@ -11,6 +11,7 @@ from services.db_service import DatabaseService
 from services.llm_service import get_llm
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+import sqlite3
 
 
 def parse_tables_json(tables_json_path: Path) -> Dict:
@@ -119,7 +120,7 @@ Column: {col}
 Table: {table_name}
 Database: {db_id}
 
-The `{col}` column stores information about {col.replace('_', ' ')} in the {table_name} table.
+The `{col}` column stores information about {col.replace('_', ' ')} in {table_name} table.
 """
             documents.append({
                 "content": col_desc,
@@ -213,111 +214,150 @@ def build_kb_from_spider(
     print(f"Knowledge base built successfully!")
 
 
-def build_kb_with_postgres_schema(
-    db_list: Optional[List[str]] = None
+def build_kb_from_sqlite_dir(
+    spider_db_path: Path,
+    db_list: Optional[List[str]] = None,
+    max_databases: Optional[int] = None
 ):
-    """Build knowledge base by reading actual PostgreSQL schemas."""
-    print("Building knowledge base from PostgreSQL schemas...")
+    """
+    Build knowledge base from SQLite SQLite databases.
+
+    This reads actual schema from SQLite files.
+    """
+    print(f"Building knowledge base from SQLite databases in {spider_db_path}")
+
+    spider_db_path = Path(spider_db_path)
+
+    # Get database directories
+    all_dbs = [d.name for d in spider_db_path.iterdir() if d.is_dir()]
+
+    if db_list:
+        databases = db_list
+    elif max_databases:
+        databases = all_dbs[:max_databases]
+    else:
+        databases = all_dbs
+
+    print(f"Processing {len(databases)} databases...")
 
     kb = KnowledgeBase()
 
-    # Connect to PostgreSQL
-    db_service = DatabaseService("postgresql://postgres:password@localhost:55432/spider")
-
-    # Get all schemas (databases)
-    all_schemas = db_service.execute_query("""
-        SELECT schema_name
-        FROM information_schema.schemata
-        WHERE schema_name NOT IN ('public', 'information_schema', 'pg_catalog')
-        ORDER BY schema_name
-    """)
-
-    if db_list:
-        schemas = [row[0] for row in all_schemas if row[0] in db_list]
-    else:
-        schemas = [row[0] for row in all_schemas]
-
-    print(f"Found {len(schemas)} databases: {', '.join(schemas)}")
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=50,
+        separators=["\n\n", "\n", " ", ""]
+    )
 
     total_docs = 0
 
-    for schema_name in schemas:
-        print(f"\nProcessing schema: {schema_name}")
+    for db_name in databases:
+        db_path = spider_db_path / db_name
+        sqlite_file = db_path / f"{db_name}.sqlite"
 
-        # Set search path to schema
-        db_service.execute_query(f"SET search_path TO {schema_name}, public")
+        if not sqlite_file.exists():
+            print(f"  ⚠️ SQLite file not found: {db_name}")
+            continue
 
-        # Get all tables
-        tables = db_service.execute_query("""
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = current_schema()
-            ORDER BY table_name
-        """)
+        print(f"Processing database: {db_name}")
 
-        # Database overview
-        overview = f"""
-Database: {schema_name}
+        try:
+            # Connect to SQLite
+            conn = sqlite3.connect(str(sqlite_file))
+            cursor = conn.cursor()
+
+            # Get all tables
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            )
+            tables = [row[0] for row in cursor.fetchall()]
+
+            # Database overview
+            overview = f"""
+Database: {db_name}
 
 This database contains {len(tables)} tables:
 """
-        for table_row in tables:
-            overview += f"- {table_row[0]}\n"
-
-        kb.add_document(Document(
-            page_content=overview,
-            metadata={"type": "database_overview", "db_id": schema_name}
-        ))
-        total_docs += 1
-
-        # For each table, get columns and create DDL
-        for table_row in tables:
-            table_name = table_row[0]
-
-            # Get columns
-            columns = db_service.execute_query(f"""
-                SELECT column_name, data_type
-                FROM information_schema.columns
-                WHERE table_name = '{table_name}'
-                AND table_schema = current_schema()
-                ORDER BY ordinal_position
-            """)
-
-            # Create DDL
-            ddl = f"CREATE TABLE {table_name} (\n"
-            for col_row in columns:
-                ddl += f"    {col_row[0]} {col_row[1]},\n"
-            ddl = ddl.rstrip(",\n") + "\n);"
+            for table in tables:
+                overview += f"- {table}\n"
 
             kb.add_document(Document(
-                page_content=ddl,
-                metadata={
-                    "type": "table_ddl",
-                    "db_id": schema_name,
-                    "table_name": table_name
-                }
+                page_content=overview,
+                metadata={"type": "database_overview", "db_id": db_name}
             ))
             total_docs += 1
 
-            # Column descriptions
-            for col_row in columns:
-                col_desc = f"""
-Column: {col_row[0]}
-Table: {table_name}
-Database: {schema_name}
+            # For each table, get schema
+            for table_name in tables:
+                # Get columns
+                cursor.execute(f"PRAGMA table_info({table_name})")
+                columns = cursor.fetchall()
 
-The `{col_row[0]}` column stores {col_row[1]} data in the {table_name} table.
-"""
+                # Build DDL
+                ddl = f"CREATE TABLE {table_name} (\n"
+                for col in columns:
+                    col_name = col[1]
+                    col_type = col[2].upper()
+                    ddl += f"    {col_name} {col_type},\n"
+                ddl = ddl.rstrip(",\n") + "\n);"
+
                 kb.add_document(Document(
-                    page_content=col_desc,
+                    page_content=ddl,
                     metadata={
-                        "type": "column_description",
-                        "db_id": schema_name,
-                        "table_name": table_name,
-                        "column_name": col_row[0]
+                        "type": "table_ddl",
+                        "db_id": db_name,
+                        "table_name": table_name
                     }
                 ))
                 total_docs += 1
+
+                # Column descriptions
+                for col in columns:
+                    col_name = col[1]
+                    col_type = col[2].upper()
+                    col_desc = f"""
+Column: {col_name}
+Table: {table_name}
+Database: {db_name}
+
+The `{col_name}` column stores {col_type} data in {table_name} table.
+"""
+                    kb.add_document(Document(
+                        page_content=col_desc,
+                        metadata={
+                            "type": "column_description",
+                            "db_id": db_name,
+                            "table_name": table_name,
+                            "column_name": col_name
+                        }
+                    ))
+                    total_docs += 1
+
+            # Get foreign keys
+            cursor.execute("SELECT * FROM sqlite_master WHERE type='index'")
+            indexes = cursor.fetchall()
+
+            fk_desc = ""
+            for idx in indexes:
+                sql = idx[4]
+                if 'FOREIGN KEY' in sql:
+                    fk_desc += f"{sql}\n"
+
+            if fk_desc:
+                kb.add_document(Document(
+                    page_content=fk_desc,
+                    metadata={
+                        "type": "foreign_keys",
+                        "db_id": db_name
+                    }
+                ))
+                total_docs += 1
+
+            conn.close()
+            print(f"  Added schema documents for {db_name}")
+
+        except Exception as e:
+            print(f"  ❌ Error processing {db_name}: {e}")
+            continue
 
     print(f"\nTotal documents added: {total_docs}")
     print("Knowledge base built successfully!")
@@ -331,15 +371,21 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Build ChromaDB KB from Spider")
     parser.add_argument(
+        "--spider-path",
+        type=str,
+        default="E:/spider_data/spider_data/database",
+        help="Path to Spider database directory"
+    )
+    parser.add_argument(
         "--tables-json",
         type=str,
         default="E:/spider_data/spider_data/tables.json",
         help="Path to Spider tables.json"
     )
     parser.add_argument(
-        "--use-postgres",
+        "--use-sqlite",
         action="store_true",
-        help="Build KB from PostgreSQL schemas instead of JSON"
+        help="Build KB from SQLite database files (recommended)"
     )
     parser.add_argument(
         "--db-list",
@@ -355,11 +401,15 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.use_postgres:
-        build_kb_with_postgres_schema(db_list=args.db_list)
+    if args.use_sqlite:
+        build_kb_from_sqlite_dir(
+            spider_db_path=Path(args.spider_path),
+            db_list=args.db_list,
+            max_databases=args.max_db
+        )
     else:
         build_kb_from_spider(
-            Path(args.tables_json),
+            tables_json_path=Path(args.tables_json),
             db_list=args.db_list,
             max_databases=args.max_db
         )

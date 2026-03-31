@@ -1,5 +1,6 @@
 """
 Spider dataset test runner and evaluation script.
+Uses SQLite databases directly (recommended for Spider evaluation).
 """
 
 import json
@@ -24,13 +25,14 @@ class TestResult:
     predicted_sql: str
     execution_time: float
     error: Optional[str] = None
-    exact_match: bool = False
+    exact_result_match: bool = False  # Result-based match
+    exact_sql_match: bool = False  # SQL text match
 
 
 def normalize_sql(sql: str) -> str:
     """Normalize SQL for comparison."""
     # Remove extra whitespace
-    sql = re.sub(r'\s+', ' ', sql.strip())
+'    sql = re.sub(r'\s+', ' ', sql.strip())
 
     # Convert to lowercase (for comparison)
     sql = sql.lower()
@@ -38,8 +40,8 @@ def normalize_sql(sql: str) -> str:
     return sql
 
 
-def check_exact_match(gold_sql: str, pred_sql: str) -> bool:
-    """Check exact match between SQLs."""
+def check_exact_sql_match(gold_sql: str, pred_sql: str) -> bool:
+    """Check exact match between SQLs (text-based)."""
     # Normalize both SQLs
     gold_normalized = normalize_sql(gold_sql)
     pred_normalized = normalize_sql(pred_sql)
@@ -62,7 +64,7 @@ def check_result_match(
     pred_sql: str,
     db_service: DatabaseService
 ) -> bool:
-    """Check if SQL results match."""
+    """Check if SQL results match (execution-based)."""
     gold_result = execute_sql_result(gold_sql, db_service)
     pred_result = execute_sql_result(pred_sql, db_service)
 
@@ -76,25 +78,35 @@ def check_result_match(
     return gold_set == pred_set
 
 
+def get_sqlite_uri(spider_db_path: Path, db_id: str) -> str:
+    """Get SQLite URI for a specific Spider database."""
+    sqlite_file = spider_db_path / db_id / f"{db_id}.sqlite"
+    return f"sqlite:///{sqlite_file}"
+
+
 def run_single_test(
     db_id: str,
     question: str,
     gold_sql: str,
     graph,
-    db_uri: str,
-    timeout: float = 30.0
+    spider_db_path: Path,
+    use_sqlite: bool = True
 ) -> TestResult:
     """Run a single test case."""
     start_time = time.time()
 
-    # Set database URI for this test
-    test_db_uri = db_uri.replace("/spider", f"/spider?options=-csearch_path%3D{db_id}")
-
     try:
+        # Get database URI
+        if use_sqlite:
+            db_uri = get_sqlite_uri(spider_db_path, db_id)
+        else:
+            # PostgreSQL (if needed)
+            db_uri = f"postgresql://postgres:password@localhost:55432/spider?options=-csearch_path%3D{db_id}"
+
         # Create initial state
         state = create_initial_state(
             question=question,
-            db_uri=test_db_uri
+            db_uri=db_uri
         )
 
         # Run agent
@@ -103,8 +115,12 @@ def run_single_test(
 
         execution_time = time.time() - start_time
 
-        # Check exact match
-        exact_match = check_exact_match(gold_sql, predicted_sql)
+        # Check SQL text match
+        exact_sql_match = check_exact_sql_match(gold_sql, predicted_sql)
+
+        # Check result match
+        db_service = DatabaseService(db_uri)
+        exact_result_match = check_result_match(gold_sql, predicted_sql, db_service)
 
         return TestResult(
             db_id=db_id,
@@ -112,7 +128,8 @@ def run_single_test(
             gold_sql=gold_sql,
             predicted_sql=predicted_sql,
             execution_time=execution_time,
-            exact_match=exact_match
+            exact_sql_match=exact_sql_match,
+            exact_result_match=exact_result_match
         )
 
     except Exception as e:
@@ -124,16 +141,19 @@ def run_single_test(
             predicted_sql="",
             execution_time=execution_time,
             error=str(e),
-            exact_match=False
+            exact_sql_match=False,
+            exact_result_match=False
         )
 
 
 def run_spider_tests(
     test_json_path: Path,
+    spider_db_path: Path,
     gold_sql_path: Optional[Path] = None,
     max_tests: int = None,
     db_list: Optional[List[str]] = None,
-    skip_errors: bool = True
+    skip_errors: bool = True,
+    use_sqlite: bool = True
 ) -> List[TestResult]:
     """Run Spider dataset tests."""
     print(f"Loading test data from {test_json_path}")
@@ -154,14 +174,12 @@ def run_spider_tests(
     if max_tests:
         test_data = test_data[:max_tests]
 
-    print(f"Running {len(test_data)} tests...\n")
+    print(f"Running {len(test_data)} tests...")
+    print(f"Using {'SQLite' if use_sqlite else 'PostgreSQL'} databases\n")
 
     # Build agent graph
     print("Building agent graph...")
     graph = build_graph()
-
-    # Database URI (will be modified per test)
-    db_uri = "postgresql://postgres:password@localhost:55432/spider"
 
     results = []
     skipped = 0
@@ -183,7 +201,8 @@ def run_spider_tests(
             question=question,
             gold_sql=gold_sql,
             graph=graph,
-            db_uri=db_uri
+            spider_db_path=spider_db_path,
+            use_sqlite=use_sqlite
         )
 
         if result.error and skip_errors:
@@ -193,13 +212,13 @@ def run_spider_tests(
 
         results.append(result)
 
-        if result.exact_match:
-            print(f"  ✅ Exact match! ({result.execution_time:.2f}s)")
-        else:
-            print(f"  ❌ No match ({result.execution_time:.2f}s)")
-            if result.predicted_sql:
-                print(f"  Gold: {gold_sql[:100]}...")
-                print(f"  Pred: {result.predicted_sql[:100]}...")
+        match_type = "Result" if result.exact_result_match else ("SQL" if result.exact_sql_match else "None")
+        status = "✅" if result.exact_result_match or result.exact_sql_match else "❌"
+        print(f"  {status} Match Type: {match_type} ({result.execution_time:.2f}s)")
+
+        if not result.exact_result_match and not result.exact_sql_match:
+            print(f"  Gold: {gold_sql[:100]}...")
+            print(f"  Pred: {result.predicted_sql[:100]}...")
 
         print()
 
@@ -212,14 +231,16 @@ def run_spider_tests(
 def calculate_metrics(results: List[TestResult]) -> Dict:
     """Calculate evaluation metrics."""
     total = len(results)
-    correct = sum(1 for r in results if r.exact_match)
+    correct_sql = sum(1 for r in results if r.exact_sql_match)
+    correct_result = sum(1 for r in results if r.exact_result_match)
     avg_time = sum(r.execution_time for r in results) / total if total > 0 else 0
 
     metrics = {
         "total": total,
-        "correct": correct,
-        "wrong": total - correct,
-        "accuracy": correct / total if total > 0 else 0,
+        "correct_sql": correct_sql,
+        "correct_result": correct_result,
+        "accuracy_sql": correct_sql / total if total > 0 else 0,
+        "accuracy_result": correct_result / total if total > 0 else 0,
         "avg_time": avg_time,
         "by_database": {}
     }
@@ -233,33 +254,40 @@ def calculate_metrics(results: List[TestResult]) -> Dict:
 
     for db_id, db_res in db_results.items():
         total_db = len(db_res)
-        correct_db = sum(1 for r in db_res if r.exact_match)
+        correct_db_sql = sum(1 for r in db_res if r.exact_sql_match)
+        correct_db_result = sum(1 for r in db_res if r.exact_result_match)
         metrics["by_database"][db_id] = {
             "total": total_db,
-            "correct": correct_db,
-            "accuracy": correct_db / total_db if total_db > 0 else 0
+            "correct_sql": correct_db_sql,
+            "correct_result": correct_db_result,
+            "accuracy_sql": correct_db_sql / total_db if total_db > 0 else 0,
+            "accuracy_result": correct_db_result / total_db if total_db > 0 else 0
         }
 
     return metrics
 
 
-def print_report(metrics: Dict):
+def print_report(metrics: Dict, use_sqlite: bool = True):
     """Print evaluation report."""
+    db_type = "SQLite" if use_sqlite else "PostgreSQL"
+
     print("=" * 60)
-    print("SPIDER EVALUATION REPORT")
+    print(f"SPIDER EVALUATION REPORT ({db_type})")
     print("=" * 60)
 
     print(f"\nOverall Results:")
     print(f"  Total Tests: {metrics['total']}")
-    print(f"  Correct: {metrics['correct']}")
-    print(f"  Wrong: {metrics['wrong']}")
-    print(f"  Accuracy: {metrics['accuracy'] * 100:.2f}%")
+    print(f"  SQL Match: {metrics['correct_sql']} ({metrics['accuracy_sql'] * 100:.2f}%)")
+    print(f"  Result Match: {metrics['correct_result']} ({metrics['accuracy_result'] * 100:.2f}%)")
     print(f"  Avg Time: {metrics['avg_time']:.2f}s")
 
     print(f"\nResults by Database:")
     for db_id, db_metrics in sorted(metrics["by_database"].items()):
-        print(f"  {db_id}: {db_metrics['correct']}/{db_metrics['total']} "
-              f"({db_metrics['accuracy'] * 100:.1f}%)")
+        print(f"  {db_id}:")
+        print(f"    SQL: {db_metrics['correct_sql']}/{db_metrics['total']} "
+              f"({db_metrics['accuracy_sql'] * 100:.1f}%)")
+        print(f"    Result: {db_metrics['correct_result']}/{db_metrics['total']} "
+              f"({db_metrics['accuracy_result'] * 100:.1f}%)")
 
     print()
 
@@ -274,7 +302,8 @@ def save_results(results: List[TestResult], metrics: Dict, output_path: Path):
             "gold_sql": r.gold_sql,
             "predicted_sql": r.predicted_sql,
             "execution_time": r.execution_time,
-            "exact_match": r.exact_match,
+            "exact_sql_match": r.exact_sql_match,
+            "exact_result_match": r.exact_result_match,
             "error": r.error or ""
         })
 
@@ -304,6 +333,12 @@ if __name__ == "__main__":
         help="Path to Spider test/dev JSON"
     )
     parser.add_argument(
+        "--spider-path",
+        type=str,
+        default="E:/spider_data/spider_data/database",
+        help="Path to Spider database directory"
+    )
+    parser.add_argument(
         "--gold-sql",
         type=str,
         default="E:/spider_data/spider_data/dev_gold.sql",
@@ -326,6 +361,11 @@ if __name__ == "__main__":
         default="results/spider_test_results.csv",
         help="Output path for results CSV"
     )
+    parser.add_argument(
+        "--use-postgres",
+        action="store_true",
+        help="Use PostgreSQL instead of SQLite"
+    )
 
     args = parser.parse_args()
 
@@ -335,16 +375,18 @@ if __name__ == "__main__":
     # Run tests
     results = run_spider_tests(
         test_json_path=Path(args.test_json),
+        spider_db_path=Path(args.spider_path),
         gold_sql_path=Path(args.gold_sql) if args.gold_sql else None,
         max_tests=args.max_tests,
-        db_list=args.db_list
+        db_list=args.db_list,
+        use_sqlite=not args.use_postgres
     )
 
     # Calculate metrics
     metrics = calculate_metrics(results)
 
     # Print report
-    print_report(metrics)
+    print_report(metrics, use_sqlite=not args.use_postgres)
 
     # Save results
     save_results(results, metrics, Path(args.output))

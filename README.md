@@ -175,13 +175,32 @@ smart-query-agent/
 
 ## 🧪 测试
 
+### 基础测试
+
 ```bash
-# 运行测试
+# 运行单元测试
 pytest tests/
 
 # 生成测试报告
 pytest tests/ --cov=services --cov-report=html
 ```
+
+### Spider 数据集测试
+
+本项目支持 Spider Text-to-SQL 基准数据集评估。
+
+```bash
+# 构建 Spider 知识库
+python scripts/build_spider_kb.py --use-sqlite --max-db 5
+
+# 运行 Spider 测试
+python scripts/test_spider.py --max-tests 20
+
+# 完整评估
+python scripts/test_spider.py --test-json E:/spider_data/spider_data/dev.json
+```
+
+详细说明请参考 [SPIDER_SETUP.md](SPIDER_SETUP.md)。
 
 ## 📊 开发进度
 
