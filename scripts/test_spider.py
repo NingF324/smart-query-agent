@@ -144,14 +144,31 @@ def run_spider_tests(
     max_tests: Optional[int] = None,
     db_list: Optional[List[str]] = None,
     skip_errors: bool = True,
+    filter_file: Optional[Path] = None,
 ) -> List[TestResult]:
     print(f"Loading test data from {test_json_path}")
     with open(test_json_path, "r", encoding="utf-8") as f:
         test_data = json.load(f)
 
-    # Filter
+    # Filter by DB list
     if db_list:
         test_data = [t for t in test_data if t["db_id"] in db_list]
+
+    # Filter by CSV file (use question + db_id as match key)
+    if filter_file and filter_file.exists():
+        import csv as csv_mod
+        print(f"Filtering cases from {filter_file}")
+        filter_keys = set()
+        with open(filter_file, "r", encoding="utf-8") as csvf:
+            reader = csv_mod.DictReader(csvf)
+            for row in reader:
+                q = row.get("问题", row.get("question", ""))
+                db = row.get("数据库", row.get("db_id", ""))
+                filter_keys.add((q.strip(), db.strip()))
+        before = len(test_data)
+        test_data = [t for t in test_data if (t["question"].strip(), t["db_id"]) in filter_keys]
+        print(f"  Filtered: {before} -> {len(test_data)} cases")
+
     if max_tests:
         test_data = test_data[:max_tests]
 
@@ -472,6 +489,8 @@ if __name__ == "__main__":
                         help="Whether to count errors in results (default: true)")
     parser.add_argument("--output-dir", type=str, default="results",
                         help="Directory to save results (default: results)")
+    parser.add_argument("--filter-file", type=str, default=None,
+                        help="CSV file to filter test cases (only run cases listed in it)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -487,6 +506,7 @@ if __name__ == "__main__":
         max_tests=args.max_tests,
         db_list=args.db_list,
         skip_errors=args.skip_errors == "true",
+        filter_file=Path(args.filter_file) if args.filter_file else None,
     )
 
     total_wall = time.time() - total_wall_start

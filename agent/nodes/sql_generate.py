@@ -138,7 +138,7 @@ def build_retry_hint(retry_count: int, error_message: str) -> str:
 
 
 def build_schema_description(schemas: list) -> str:
-    """构建 Schema 描述用于 LLM。"""
+    """构建 Schema 描述用于 LLM，包含 DDL 和列详情。"""
     if not schemas:
         return "No schemas available"
 
@@ -147,7 +147,17 @@ def build_schema_description(schemas: list) -> str:
         description += f"Table: {schema['table_name']}\n"
         description += f"DDL: {schema['ddl']}\n"
         description += f"Columns: {len(schema['columns'])}\n"
-        description += f"Rows: {schema['row_count']}\n\n"
+        description += f"Rows: {schema['row_count']}\n"
+
+        # Output column details to help LLM understand field types and sample values
+        cols = schema.get("columns", [])
+        if cols:
+            description += "Column details:\n"
+            for col in cols:
+                col_name = col.get("name", "")
+                col_type = col.get("type", "")
+                description += f"  - {col_name} ({col_type})\n"
+        description += "\n"
     return description
 
 
