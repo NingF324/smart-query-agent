@@ -2,7 +2,7 @@
 意图解析节点 - 理解用户查询意图，提取关键信息
 """
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from agent.state import AgentState
 from services.conversation_service import extract_limit, extract_time_range, resolve_question_with_history

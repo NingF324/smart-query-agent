@@ -4,7 +4,7 @@
 """
 import logging
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from contextlib import contextmanager
 import threading
 from sqlalchemy import create_engine, text, inspect
