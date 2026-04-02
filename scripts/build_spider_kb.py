@@ -8,9 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from services.knowledge_base import KnowledgeBase
 from services.db_service import DatabaseService
-from services.llm_service import get_llm
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from services.llm_service import get_llm_service
 import sqlite3
 
 
@@ -20,50 +18,20 @@ def parse_tables_json(tables_json_path: Path) -> Dict:
         return json.load(f)
 
 
-def format_schema_for_kb(db_entry: Dict) -> List[str]:
+def format_schema_for_kb(db_entry: Dict) -> Dict:
     """
     Format database schema for ChromaDB indexing.
 
-    Returns list of document strings:
-    - Database overview
-    - Table DDL for each table
-    - Table descriptions
-    - Column descriptions
+    Returns dictionary with DDL and descriptions.
     """
-    documents = []
-    db_id = db_entry.get('db_id', '')
+    result = {
+        "db_id": db_entry.get('db_id', ''),
+        "tables": []
+    }
 
-    # Database overview
     tables = db_entry.get('table_names', [])
     columns = db_entry.get('column_names', [])
     foreign_keys = db_entry.get('foreign_keys', [])
-
-    # Create column mapping
-    col_map = {}
-    for col_idx, col_name in columns:
-        if col_idx >= 0:
-            table_name = tables[col_idx]
-            col_map[(col_idx, col_name)] = table_name
-
-    # 1. Database overview
-    overview = f"""
-Database: {db_id}
-
-This database contains {len(tables)} tables:
-{', '.join(f'`{t}`' for t in tables)}
-
-Tables:
-"""
-    for table in tables:
-        overview += f"- {table}\n"
-
-    documents.append({
-        "content": overview,
-        "metadata": {
-            "type": "database_overview",
-            "db_id": db_id
-        }
-    })
 
     # 2. Table DDL and descriptions
     for table_idx, table_name in enumerate(tables):
@@ -73,89 +41,20 @@ Tables:
             if col_idx == table_idx:
                 table_columns.append(col_name)
 
-        # Create DDL-like description
-        ddl = f"""
-Table: {table_name} in database {db_id}
-
-Schema definition:
-```sql
-CREATE TABLE {table_name} (
-"""
+        # Create DDL
+        ddl = f"CREATE TABLE {table_name} (\n"
         for col in table_columns:
             ddl += f"    {col} TEXT,\n"
         ddl = ddl.rstrip(",\n") + "\n);"
 
-        documents.append({
-            "content": ddl,
-            "metadata": {
-                "type": "table_ddl",
-                "db_id": db_id,
-                "table_name": table_name
-            }
+        result["tables"].append({
+            "name": table_name,
+            "ddl": ddl,
+            "columns": table_columns,
+            "description": f"This table contains data related to {table_name.replace('_', ' ')}."
         })
 
-        # Table description document
-        desc = f"""
-Table: {table_name}
-Database: {db_id}
-
-Columns: {', '.join(f'`{c}`' for c in table_columns)}
-
-This table contains data related to {table_name.replace('_', ' ')}.
-"""
-        documents.append({
-            "content": desc,
-            "metadata": {
-                "type": "table_description",
-                "db_id": db_id,
-                "table_name": table_name,
-                "columns": table_columns
-            }
-        })
-
-        # 3. Column descriptions
-        for col in table_columns:
-            col_desc = f"""
-Column: {col}
-Table: {table_name}
-Database: {db_id}
-
-The `{col}` column stores information about {col.replace('_', ' ')} in {table_name} table.
-"""
-            documents.append({
-                "content": col_desc,
-                "metadata": {
-                    "type": "column_description",
-                    "db_id": db_id,
-                    "table_name": table_name,
-                    "column_name": col
-                }
-            })
-
-    # 4. Foreign keys
-    if foreign_keys:
-        fk_desc = f"""
-Database: {db_id}
-
-Foreign Key Relationships:
-"""
-        for fk in foreign_keys:
-            src_table = tables[fk[0]]
-            src_col = columns[fk[1]][1]
-            tgt_table = tables[fk[2]]
-            tgt_col = columns[fk[3]][1]
-
-            fk_desc += f"- {src_table}.{src_col} → {tgt_table}.{tgt_col}\n"
-
-        documents.append({
-            "content": fk_desc,
-            "metadata": {
-                "type": "foreign_keys",
-                "db_id": db_id
-            }
-        })
-
-    return documents
+    return result
 
 
 def build_kb_from_spider(
@@ -179,14 +78,7 @@ def build_kb_from_spider(
 
     # Initialize services
     kb = KnowledgeBase()
-    llm = get_llm()
-
-    # Text splitter for chunking
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=50,
-        separators=["\n\n", "\n", " ", ""]
-    )
+    llm = get_llm_service()
 
     total_documents = 0
 
@@ -195,20 +87,19 @@ def build_kb_from_spider(
         print(f"Processing database: {db_id}")
 
         # Format schema documents
-        raw_docs = format_schema_for_kb(db_entry)
+        schema_data = format_schema_for_kb(db_entry)
 
-        # Chunk documents
-        for raw_doc in raw_docs:
-            chunks = text_splitter.split_text(raw_doc['content'])
-            for chunk in chunks:
-                doc = Document(
-                    page_content=chunk,
-                    metadata=raw_doc['metadata']
-                )
-                kb.add_document(doc)
-                total_documents += 1
+        # Add each table DDL to knowledge base
+        for table in schema_data["tables"]:
+            kb.add_ddl(
+                table_name=f"{db_id}.{table['name']}",
+                ddl=table['ddl'],
+                columns=[{"name": col, "type": "TEXT"} for col in table['columns']],
+                description=table['description']
+            )
+            total_documents += 1
 
-        print(f"  Added {len(raw_docs)} schema documents for {db_id}")
+        print(f"  Added {len(schema_data['tables'])} schema documents for {db_id}")
 
     print(f"\nTotal documents added: {total_documents}")
     print(f"Knowledge base built successfully!")
@@ -220,7 +111,7 @@ def build_kb_from_sqlite_dir(
     max_databases: Optional[int] = None
 ):
     """
-    Build knowledge base from SQLite SQLite databases.
+    Build knowledge base from SQLite databases.
 
     This reads actual schema from SQLite files.
     """
@@ -242,12 +133,6 @@ def build_kb_from_sqlite_dir(
 
     kb = KnowledgeBase()
 
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=50,
-        separators=["\n\n", "\n", " ", ""]
-    )
-
     total_docs = 0
 
     for db_name in databases:
@@ -255,7 +140,7 @@ def build_kb_from_sqlite_dir(
         sqlite_file = db_path / f"{db_name}.sqlite"
 
         if not sqlite_file.exists():
-            print(f"  ⚠️ SQLite file not found: {db_name}")
+            print(f"  [Warning] SQLite file not found: {db_name}")
             continue
 
         print(f"Processing database: {db_name}")
@@ -271,21 +156,6 @@ def build_kb_from_sqlite_dir(
             )
             tables = [row[0] for row in cursor.fetchall()]
 
-            # Database overview
-            overview = f"""
-Database: {db_name}
-
-This database contains {len(tables)} tables:
-"""
-            for table in tables:
-                overview += f"- {table}\n"
-
-            kb.add_document(Document(
-                page_content=overview,
-                metadata={"type": "database_overview", "db_id": db_name}
-            ))
-            total_docs += 1
-
             # For each table, get schema
             for table_name in tables:
                 # Get columns
@@ -294,69 +164,28 @@ This database contains {len(tables)} tables:
 
                 # Build DDL
                 ddl = f"CREATE TABLE {table_name} (\n"
+                column_info = []
                 for col in columns:
                     col_name = col[1]
                     col_type = col[2].upper()
                     ddl += f"    {col_name} {col_type},\n"
+                    column_info.append({"name": col_name, "type": col_type})
                 ddl = ddl.rstrip(",\n") + "\n);"
 
-                kb.add_document(Document(
-                    page_content=ddl,
-                    metadata={
-                        "type": "table_ddl",
-                        "db_id": db_name,
-                        "table_name": table_name
-                    }
-                ))
-                total_docs += 1
-
-                # Column descriptions
-                for col in columns:
-                    col_name = col[1]
-                    col_type = col[2].upper()
-                    col_desc = f"""
-Column: {col_name}
-Table: {table_name}
-Database: {db_name}
-
-The `{col_name}` column stores {col_type} data in {table_name} table.
-"""
-                    kb.add_document(Document(
-                        page_content=col_desc,
-                        metadata={
-                            "type": "column_description",
-                            "db_id": db_name,
-                            "table_name": table_name,
-                            "column_name": col_name
-                        }
-                    ))
-                    total_docs += 1
-
-            # Get foreign keys
-            cursor.execute("SELECT * FROM sqlite_master WHERE type='index'")
-            indexes = cursor.fetchall()
-
-            fk_desc = ""
-            for idx in indexes:
-                sql = idx[4]
-                if 'FOREIGN KEY' in sql:
-                    fk_desc += f"{sql}\n"
-
-            if fk_desc:
-                kb.add_document(Document(
-                    page_content=fk_desc,
-                    metadata={
-                        "type": "foreign_keys",
-                        "db_id": db_name
-                    }
-                ))
+                # Add to knowledge base
+                kb.add_ddl(
+                    table_name=f"{db_name}.{table_name}",
+                    ddl=ddl,
+                    columns=column_info,
+                    description=f"Table {table_name} from database {db_name}"
+                )
                 total_docs += 1
 
             conn.close()
-            print(f"  Added schema documents for {db_name}")
+            print(f"  Added {len(tables)} tables for {db_name}")
 
         except Exception as e:
-            print(f"  ❌ Error processing {db_name}: {e}")
+            print(f"  [Error] Error processing {db_name}: {e}")
             continue
 
     print(f"\nTotal documents added: {total_docs}")

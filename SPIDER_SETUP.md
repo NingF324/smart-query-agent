@@ -82,7 +82,7 @@ results/
 | execution_time | 执行时间（秒） |
 | exact_sql_match | SQL 文本是否完全匹配 (True/False) |
 | exact_result_match | SQL 执行结果是否匹配 (True/False) |
-|** error | 错误信息（如果有） |
+| error | 错误信息（如果有） |
 
 ### 评估指标
 

@@ -24,11 +24,24 @@ class AgentState(TypedDict):
     max_retries: int
     error_type: Optional[str]
     execution_stats: Dict[str, Any]
+    db_uri: str
 
 
 
-def create_initial_state(question: str, chat_history: Optional[List[Dict[str, Any]]] = None) -> AgentState:
-    """Create initial state."""
+def create_initial_state(
+    question: str,
+    chat_history: Optional[List[Dict[str, Any]]] = None,
+    db_uri: Optional[str] = None
+) -> AgentState:
+    """Create initial state.
+
+    Args:
+        question: User question
+        chat_history: Previous chat history
+        db_uri: Database URI (optional, will use config DB_URI if not provided)
+    """
+    from config import DB_URI
+
     return AgentState({
         "question": question,
         "resolved_question": question,
@@ -45,6 +58,7 @@ def create_initial_state(question: str, chat_history: Optional[List[Dict[str, An
         "max_retries": 3,
         "error_type": None,
         "execution_stats": {},
+        "db_uri": db_uri or DB_URI,
     })
 
 
