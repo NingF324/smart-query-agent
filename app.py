@@ -11,7 +11,7 @@ from agent.state import create_initial_state
 from config import DB_URI
 from services.conversation_service import build_assistant_message, get_recent_chat_history
 from services.db_service import DatabaseService
-from services.knowledge_base import KnowledgeBase
+from services.knowledge_base import get_knowledge_base
 
 
 st.set_page_config(
@@ -38,7 +38,7 @@ def init_services():
     if "db_service" not in st.session_state:
         st.session_state.db_service = DatabaseService(DB_URI)
     if "kb" not in st.session_state:
-        st.session_state.kb = KnowledgeBase()
+        st.session_state.kb = get_knowledge_base()
     if "agent_app" not in st.session_state:
         st.session_state.agent_app = build_graph()
     if "messages" not in st.session_state:

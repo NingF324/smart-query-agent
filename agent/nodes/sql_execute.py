@@ -2,6 +2,7 @@
 SQL 执行节点 - 执行 SQL 并处理超时和错误
 """
 import logging
+import time
 from typing import Dict, Any
 from agent.state import AgentState
 from services.db_service import get_state_db_service
@@ -27,14 +28,18 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
     execution_stats = dict(state.get("execution_stats", {}))
 
     logger.info(f"[SQL Execute] Executing SQL: {generated_sql[:100]}...")
+    started_at = time.perf_counter()
 
 
     if not generated_sql:
         logger.warning("[SQL Execute] No SQL to execute")
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
         execution_stats.update({
             "execution_attempted": False,
             "execution_success": False,
             "execution_error": "No SQL generated",
+            "execution_latency_ms": elapsed_ms,
+            "execution_error_type": "no_sql",
         })
         return {
             "query_result": [],
@@ -57,11 +62,14 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
         result = db_service.execute_query(generated_sql)
 
         logger.info(f"[SQL Execute] Query executed successfully, returned {len(result)} rows")
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
 
         execution_stats.update({
             "execution_attempted": True,
             "execution_success": True,
             "execution_error": "",
+            "execution_latency_ms": elapsed_ms,
+            "execution_error_type": "",
         })
         return {
             "query_result": result,
@@ -78,10 +86,13 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
         # SQL 不安全的错误
         logger.warning(f"[SQL Execute] Safety error: {e}")
 
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
         execution_stats.update({
             "execution_attempted": True,
             "execution_success": False,
             "execution_error": str(e),
+            "execution_latency_ms": elapsed_ms,
+            "execution_error_type": "permission_error",
         })
         return {
             "query_result": [],
@@ -99,10 +110,13 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
         # 超时错误
         logger.warning(f"[SQL Execute] Query timeout: {e}")
 
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
         execution_stats.update({
             "execution_attempted": True,
             "execution_success": False,
             "execution_error": f"Query timeout: {e}",
+            "execution_latency_ms": elapsed_ms,
+            "execution_error_type": "timeout",
         })
         return {
             "query_result": [],
@@ -120,10 +134,13 @@ def sql_execute_node(state: AgentState) -> Dict[str, Any]:
         # 其他执行错误
         logger.warning(f"[SQL Execute] Query execution error: {e}")
 
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
         execution_stats.update({
             "execution_attempted": True,
             "execution_success": False,
             "execution_error": str(e),
+            "execution_latency_ms": elapsed_ms,
+            "execution_error_type": "execution_error",
         })
         return {
             "query_result": [],

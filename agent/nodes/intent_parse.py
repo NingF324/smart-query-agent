@@ -31,6 +31,7 @@ def intent_parse_node(state: AgentState) -> Dict[str, Any]:
         "entities": extract_entities(resolved_question),
         "time_range": extract_time_range(resolved_question),
         "limit": extract_limit(resolved_question) or 100,
+        "schema_hints": build_schema_hints(resolved_question),
         "is_follow_up": resolution["is_follow_up"],
         "reference_question": resolution.get("reference_question", ""),
     }
@@ -69,6 +70,15 @@ def extract_entities(question: str) -> List[str]:
         if keyword in question and keyword not in entities:
             entities.append(keyword)
     return entities
+
+
+def build_schema_hints(question: str) -> List[str]:
+    """Build lightweight schema retrieval hints from question text."""
+    hints: List[str] = []
+    for token in ["join", "group", "count", "sum", "avg", "where", "order", "by", "top", "limit"]:
+        if token in question.lower():
+            hints.append(token)
+    return hints
 
 
 

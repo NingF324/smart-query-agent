@@ -218,6 +218,7 @@ def evaluate_cases(
         validation_result = dict(final_state.get("validation_result") or {})
         query_result = list(final_state.get("query_result") or [])
         execution_stats = dict(final_state.get("execution_stats") or {})
+        error_type = str(final_state.get("error_type") or "")
         expected_rows = resolve_expected_rows(case, db_service=db_service)
 
         em_measurable = bool(case.expected_sql)
@@ -243,7 +244,12 @@ def evaluate_cases(
             "fix_attempted": bool(execution_stats.get("fix_attempted")),
             "fix_success": bool(execution_stats.get("fix_success")),
             "safety_blocked": is_safety_blocked(final_state),
+            "error_type": error_type or infer_error_type(
+                failure_reason
+                or str(validation_result.get("error") or execution_stats.get("execution_error") or "")
+            ),
             "error": failure_reason or str(validation_result.get("error") or execution_stats.get("execution_error") or ""),
+            "execution_stats": execution_stats,
         })
 
     summary = summarize_case_results(results)
@@ -303,6 +309,11 @@ def summarize_case_results(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     fix_successes = [item for item in fix_attempts if item.get("fix_success")]
     safety_results = [item for item in results if "safety" in item.get("tags", [])]
     safety_blocks = [item for item in safety_results if item.get("safety_blocked")]
+    failed_results = [item for item in results if item.get("ex_measurable") and not item.get("execution_match")]
+    failure_breakdown: Dict[str, int] = {}
+    for item in failed_results:
+        key = str(item.get("error_type") or "unknown")
+        failure_breakdown[key] = failure_breakdown.get(key, 0) + 1
 
     return {
         "total_cases": total,
@@ -320,8 +331,27 @@ def summarize_case_results(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "safety_case_count": len(safety_results),
         "safety_block_cases": len(safety_blocks),
         "safety_block_rate": round(len(safety_blocks) / len(safety_results) * 100, 2) if safety_results else 0.0,
+        "failure_breakdown": failure_breakdown,
         "avg_latency_ms": round(sum(item.get("latency_ms", 0.0) for item in results) / total, 2) if total else 0.0,
     }
+
+
+def infer_error_type(error_message: str) -> str:
+    """Map free-form error messages to a compact error type label."""
+    msg = str(error_message or "").lower()
+    if not msg:
+        return ""
+    if "timeout" in msg:
+        return "timeout"
+    if "permission denied" in msg or "unsafe" in msg or "dangerous sql" in msg:
+        return "permission_error"
+    if "no sql generated" in msg or "sql is empty" in msg:
+        return "no_sql"
+    if "connection" in msg or "api" in msg:
+        return "upstream_connection_error"
+    if "syntax error" in msg or "does not exist" in msg:
+        return "sql_error"
+    return "execution_error"
 
 
 def save_report(report: Dict[str, Any], output_path: str) -> None:

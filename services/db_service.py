@@ -1,426 +1,268 @@
-"""
-数据库服务模块 - 封装数据库连接、查询和安全校验
-支持 PostgreSQL 和 SQLite
-"""
+﻿"""Database service: query execution, safety checks, schema introspection, and shared cache."""
+
 import logging
+import os
 import re
-from typing import Dict, Any, List, Optional
-from contextlib import contextmanager
 import threading
-from sqlalchemy import create_engine, text, inspect
-from sqlalchemy.exc import SQLAlchemyError, OperationalError
+from collections import OrderedDict
+from contextlib import contextmanager
+from typing import Any, Dict, List, Optional, Tuple
+
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import QueuePool
 
-# 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class DatabaseService:
-    """数据库服务 - 支持 PostgreSQL 和 SQLite"""
+    """Database service supporting PostgreSQL and SQLite."""
 
-    # SQL 注入防护正则表达式
     DANGEROUS_PATTERNS = [
-        r'--',
-        r'/\*.*?\*/',
-        r'xp_cmdshell',
-        r'exec\s*\(',
-        r'eval\s*\(',
-        r'\bdrop\b',
-        r'\bdelete\b',
-        r'\btruncate\b',
-        r'\balter\b',
-        r'\binsert\b',
-        r'\bupdate\b',
-        r'\bgrant\b',
-        r'\brevoke\b',
+        r"--",
+        r"/\*.*?\*/",
+        r"xp_cmdshell",
+        r"exec\s*\(",
+        r"eval\s*\(",
+        r"\bdrop\b",
+        r"\bdelete\b",
+        r"\btruncate\b",
+        r"\balter\b",
+        r"\binsert\b",
+        r"\bupdate\b",
+        r"\bgrant\b",
+        r"\brevoke\b",
     ]
 
-    def __init__(self,
-                 db_uri: str,
-                 pool_size: int = 5,
-                 max_overflow: int = 10,
-                 query_timeout: int = 10):
-        """
-        初始化数据库服务
-
-        Args:
-            db_uri: 数据库连接 URI
-            pool_size: 连接池大小
-            max_overflow: 连接池最大溢出数
-            query_timeout: 查询超时时间（秒）
-        """
+    def __init__(self, db_uri: str, pool_size: int = 5, max_overflow: int = 10, query_timeout: int = 10):
         self.db_uri = db_uri
         self.query_timeout = query_timeout
         self._lock = threading.Lock()
 
-        try:
-            # 创建数据库引擎
-            self.engine = create_engine(
-                db_uri,
-                poolclass=QueuePool,
-                pool_size=pool_size,
-                max_overflow=max_overflow,
-                pool_pre_ping=True,  # 连接健康检查
-                echo=False  # 不输出 SQL 日志
-            )
+        self.engine = create_engine(
+            db_uri,
+            poolclass=QueuePool,
+            pool_size=pool_size,
+            max_overflow=max_overflow,
+            pool_pre_ping=True,
+            echo=False,
+        )
 
-            # 测试连接
-            with self.engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
+        with self.engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
 
-            logger.info(f"✅ 数据库服务初始化成功 - {db_uri}")
-
-        except Exception as e:
-            logger.error(f"❌ 数据库连接失败: {e}")
-            raise
+        logger.info("Database service initialized: %s", db_uri)
 
     @contextmanager
     def get_connection(self):
-        """获取数据库连接（上下文管理器）"""
         conn = None
         try:
             conn = self.engine.connect()
             yield conn
         finally:
-            if conn:
+            if conn is not None:
                 conn.close()
 
-    def is_safe_sql(self, sql: str) -> tuple[bool, Optional[str]]:
-        """
-        检查 SQL 是否安全（防止 SQL 注入）
-
-        Args:
-            sql: SQL 语句
-
-        Returns:
-            tuple[bool, Optional[str]]: (是否安全, 错误信息)
-        """
+    def is_safe_sql(self, sql: str) -> Tuple[bool, Optional[str]]:
         if not sql or not sql.strip():
-            return False, "SQL 语句为空"
+            return False, "SQL is empty"
 
         normalized_sql = sql.strip()
         sql_lower = normalized_sql.lower()
 
-        if not (sql_lower.startswith('select') or sql_lower.startswith('with')):
-            return False, "只允许 SELECT/CTE 查询"
+        if not (sql_lower.startswith("select") or sql_lower.startswith("with")):
+            return False, "Only SELECT/CTE queries are allowed"
 
-
-        if ';' in normalized_sql:
-            return False, "检测到危险 SQL 模式: 禁止使用分号或多语句"
+        # Allow one trailing semicolon, but reject multi-statement SQL.
+        if ";" in normalized_sql:
+            stripped = normalized_sql.rstrip()
+            if stripped.endswith(";"):
+                body = stripped[:-1]
+                if ";" in body:
+                    return False, "Detected dangerous SQL pattern: multi-statement is not allowed"
+            else:
+                return False, "Detected dangerous SQL pattern: multi-statement is not allowed"
 
         for pattern in self.DANGEROUS_PATTERNS:
             if re.search(pattern, sql_lower, re.IGNORECASE | re.DOTALL):
-                return False, f"检测到危险 SQL 模式: {pattern}"
+                return False, f"Detected dangerous SQL pattern: {pattern}"
 
         return True, None
 
-    def execute_query(self,
-                       sql: str,
-                       params: Optional[Dict[str, Any]] = None,
-                       timeout: Optional[int] = None) -> List[Dict[str, Any]]:
-        """
-        执行 SQL 查询（带超时控制）
-
-        Args:
-            sql: SQL 语句
-            params: 查询参数
-            timeout: 超时时间（秒），默认使用实例配置
-
-        Returns:
-            List[Dict[str, Any]]: 查询结果列表
-
-        Raises:
-            ValueError: SQL 不安全时
-            TimeoutError: 查询超时
-            SQLAlchemyError: 数据库错误
-        """
-        # 安全检查
+    def execute_query(
+        self,
+        sql: str,
+        params: Optional[Dict[str, Any]] = None,
+        timeout: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
         is_safe, error_msg = self.is_safe_sql(sql)
         if not is_safe:
-            logger.warning(f"⚠️ 拒绝执行不安全的 SQL: {error_msg}")
-            raise ValueError(f"SQL 不安全: {error_msg}")
+            logger.warning("Unsafe SQL blocked: %s", error_msg)
+            raise ValueError(f"SQL unsafe: {error_msg}")
 
         timeout = timeout or self.query_timeout
 
         try:
-            logger.info(f"🔍 执行查询: {sql[:100]}...")
-
             with self.engine.connect() as conn:
-                # 设置超时
-                if 'postgresql' in self.db_uri:
-                    # PostgreSQL 超时设置
+                if "postgresql" in self.db_uri:
                     conn.execute(text(f"SET statement_timeout TO {timeout * 1000}"))
-                elif 'sqlite' in self.db_uri:
-                    # SQLite 通过 PRAGMA 设置超时（毫秒）
+                elif "sqlite" in self.db_uri:
                     conn.execute(text(f"PRAGMA busy_timeout = {timeout * 1000}"))
 
-                # 执行查询
                 result = conn.execute(text(sql), params or {})
+                return [dict(row._mapping) for row in result]
 
-                # 转换为字典列表
-                rows = []
-                for row in result:
-                    rows.append(dict(row._mapping))
-
-                logger.info(f"✅ 查询执行成功 - 返回 {len(rows)} 行")
-                return rows
-
-        except OperationalError as e:
-            if 'timeout' in str(e).lower() or 'statement timeout' in str(e).lower():
-                logger.error(f"❌ 查询超时 ({timeout}秒)")
-                raise TimeoutError(f"查询超时: {timeout}秒")
-            raise
-
-        except Exception as e:
-            logger.error(f"❌ 查询执行失败: {e}")
+        except OperationalError as exc:
+            msg = str(exc).lower()
+            if "timeout" in msg or "statement timeout" in msg:
+                raise TimeoutError(f"Query timeout: {timeout}s") from exc
             raise
 
     def explain_query(self, sql: str) -> Dict[str, Any]:
-        """
-        分析 SQL 执行计划（用于性能优化和验证）
-
-        Args:
-            sql: SQL 语句
-
-        Returns:
-            Dict[str, Any]: 执行计划信息
-        """
         try:
             with self.engine.connect() as conn:
-                # 检测数据库类型
-                if 'sqlite' in self.db_uri:
+                if "sqlite" in self.db_uri:
                     explain_sql = f"EXPLAIN QUERY PLAN {sql}"
-                    result = conn.execute(text(explain_sql))
-                elif 'postgresql' in self.db_uri:
-                    explain_sql = f"EXPLAIN {sql}"
-                    result = conn.execute(text(explain_sql))
                 else:
                     explain_sql = f"EXPLAIN {sql}"
-                    result = conn.execute(text(explain_sql))
 
-                # 收集执行计划
-                plan = []
-                for row in result:
-                    plan.append(str(row[0]))
-
-                return {
-                    "sql": sql,
-                    "explain": plan,
-                    "valid": True
-                }
-
-        except Exception as e:
-            logger.warning(f"⚠️ EXPLAIN 失败: {e}")
-            return {
-                "sql": sql,
-                "explain": [],
-                "valid": False,
-                "error": str(e)
-            }
+                result = conn.execute(text(explain_sql))
+                plan = [str(row[0]) for row in result]
+                return {"sql": sql, "explain": plan, "valid": True}
+        except Exception as exc:
+            return {"sql": sql, "explain": [], "valid": False, "error": str(exc)}
 
     def get_table_names(self) -> List[str]:
-        """
-        获取所有表名
-
-        Returns:
-            List[str]: 表名列表
-        """
-        try:
-            inspector = inspect(self.engine)
-            tables = inspector.get_table_names()
-            return tables
-
-        except Exception as e:
-            logger.error(f"❌ 获取表名失败: {e}")
-            raise
+        return inspect(self.engine).get_table_names()
 
     def get_table_schema(self, table_name: str) -> str:
-        """
-        获取表的 DDL 语句
+        columns = inspect(self.engine).get_columns(table_name)
+        defs = []
+        for col in columns:
+            col_type = str(col["type"])
+            nullable = "" if col["nullable"] else " NOT NULL"
+            default = f" DEFAULT {col['default']}" if col.get("default") else ""
+            defs.append(f"    {col['name']} {col_type}{nullable}{default}")
 
-        Args:
-            table_name: 表名
-
-        Returns:
-            str: DDL 语句
-        """
-        try:
-            inspector = inspect(self.engine)
-            columns = inspector.get_columns(table_name)
-
-            # 构建 DDL
-            column_defs = []
-            for col in columns:
-                col_type = str(col['type'])
-                nullable = '' if col['nullable'] else ' NOT NULL'
-                default = f" DEFAULT {col['default']}" if col['default'] else ''
-                column_defs.append(f"    {col['name']} {col_type}{nullable}{default}")
-
-            ddl = f"CREATE TABLE {table_name} (\n"
-            ddl += ",\n".join(column_defs)
-            ddl += "\n);"
-
-            return ddl
-
-        except Exception as e:
-            logger.error(f"❌ 获取表结构失败: {e}")
-            raise
-
-    def get_table_info(self, table_name: str) -> Dict[str, Any]:
-        """
-        获取表的详细信息
-
-        Args:
-            table_name: 表名
-
-        Returns:
-            Dict[str, Any]: 表信息
-        """
-        try:
-            inspector = inspect(self.engine)
-
-            # 获取列信息
-            columns = []
-            for col in inspector.get_columns(table_name):
-                columns.append({
-                    "name": col['name'],
-                    "type": str(col['type']),
-                    "nullable": col['nullable'],
-                    "default": col['default'],
-                    "autoincrement": col.get('autoincrement', False)
-                })
-
-            # 获取主键
-            primary_keys = inspector.get_pk_constraint(table_name).get('constrained_columns', [])
-
-            # 获取外键
-            foreign_keys = []
-            for fk in inspector.get_foreign_keys(table_name):
-                foreign_keys.append({
-                    "columns": fk['constrained_columns'],
-                    "ref_table": fk['referred_table'],
-                    "ref_columns": fk['referred_columns']
-                })
-
-            return {
-                "table_name": table_name,
-                "columns": columns,
-                "primary_keys": primary_keys,
-                "foreign_keys": foreign_keys,
-                "row_count": self.get_row_count(table_name)
-            }
-
-        except Exception as e:
-            logger.error(f"❌ 获取表信息失败: {e}")
-            raise
+        ddl = f"CREATE TABLE {table_name} (\n"
+        ddl += ",\n".join(defs)
+        ddl += "\n);"
+        return ddl
 
     def get_row_count(self, table_name: str) -> int:
-        """
-        获取表的行数
-
-        Args:
-            table_name: 表名
-
-        Returns:
-            int: 行数
-        """
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
-                count = result.scalar()
-                return count
-
-        except Exception as e:
-            logger.warning(f"⚠️ 获取行数失败: {e}")
+                return int(conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).scalar())
+        except Exception:
             return 0
 
-    def test_connection(self) -> bool:
-        """
-        测试数据库连接
+    def get_table_info(self, table_name: str) -> Dict[str, Any]:
+        inspector = inspect(self.engine)
+        columns = []
+        for col in inspector.get_columns(table_name):
+            columns.append(
+                {
+                    "name": col["name"],
+                    "type": str(col["type"]),
+                    "nullable": col["nullable"],
+                    "default": col["default"],
+                    "autoincrement": col.get("autoincrement", False),
+                }
+            )
 
-        Returns:
-            bool: 连接是否正常
-        """
+        primary_keys = inspector.get_pk_constraint(table_name).get("constrained_columns", [])
+        foreign_keys = []
+        for fk in inspector.get_foreign_keys(table_name):
+            foreign_keys.append(
+                {
+                    "columns": fk["constrained_columns"],
+                    "ref_table": fk["referred_table"],
+                    "ref_columns": fk["referred_columns"],
+                }
+            )
+
+        return {
+            "table_name": table_name,
+            "columns": columns,
+            "primary_keys": primary_keys,
+            "foreign_keys": foreign_keys,
+            "row_count": self.get_row_count(table_name),
+        }
+
+    def test_connection(self) -> bool:
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(text("SELECT 1"))
-                return result.scalar() == 1
-
-        except Exception as e:
-            logger.error(f"❌ 数据库连接测试失败: {e}")
+                return conn.execute(text("SELECT 1")).scalar() == 1
+        except Exception:
             return False
 
     def health_check(self) -> Dict[str, Any]:
-        """
-        健康检查
-
-        Returns:
-            Dict[str, Any]: 健康状态
-        """
         try:
-            is_connected = self.test_connection()
-            tables = self.get_table_names() if is_connected else []
-
+            connected = self.test_connection()
+            tables = self.get_table_names() if connected else []
             return {
-                "connected": is_connected,
+                "connected": connected,
                 "tables": tables,
                 "table_count": len(tables),
-                "status": "healthy" if is_connected else "unhealthy"
+                "status": "healthy" if connected else "unhealthy",
             }
-
-        except Exception as e:
+        except Exception as exc:
             return {
                 "connected": False,
                 "tables": [],
                 "table_count": 0,
                 "status": "error",
-                "error": str(e)
+                "error": str(exc),
             }
 
 
-# 创建全局单例
 _db_service_instance: Optional[DatabaseService] = None
-
-
-# URI-based service cache (for multi-database scenarios like Spider tests)
-_db_service_cache: Dict[str, DatabaseService] = {}
+_db_service_instance_lock = threading.Lock()
+_db_service_cache: "OrderedDict[str, DatabaseService]" = OrderedDict()
+_db_service_cache_lock = threading.Lock()
+DB_SERVICE_CACHE_SIZE = int(os.getenv("DB_SERVICE_CACHE_SIZE", "64"))
 
 
 def get_state_db_service(state) -> DatabaseService:
-    """根据 state 中的 db_uri 获取或创建 DatabaseService。
-
-    当 state 包含特定的 db_uri 时，按 URI 缓存独立的数据库实例；
-    否则回退到默认全局单例。
-    """
+    """Get/create DatabaseService by db_uri with thread-safe LRU cache."""
     db_uri = state.get("db_uri") if hasattr(state, "get") else None
     if not db_uri:
         return get_db_service()
 
-    if db_uri not in _db_service_cache:
-        _db_service_cache[db_uri] = DatabaseService(db_uri)
+    with _db_service_cache_lock:
+        existing = _db_service_cache.pop(db_uri, None)
+        if existing is not None:
+            _db_service_cache[db_uri] = existing
+            return existing
 
-    return _db_service_cache[db_uri]
+        service = DatabaseService(db_uri)
+        _db_service_cache[db_uri] = service
+
+        while len(_db_service_cache) > DB_SERVICE_CACHE_SIZE:
+            evicted_uri, evicted_service = _db_service_cache.popitem(last=False)
+            try:
+                evicted_service.engine.dispose()
+            except Exception:
+                pass
+            logger.info("[DB Cache] Evicted cached DatabaseService for URI: %s", evicted_uri)
+
+        return service
 
 
 def get_db_service(db_uri: Optional[str] = None) -> DatabaseService:
-    """
-    获取数据库服务单例
-
-    Args:
-        db_uri: 数据库 URI（仅首次创建时使用）
-
-    Returns:
-        DatabaseService: 数据库服务实例
-    """
+    """Get/create singleton DatabaseService with thread-safe initialization."""
     global _db_service_instance
 
-    if _db_service_instance is None:
-        if not db_uri:
-            from config import DB_URI
-            db_uri = DB_URI
+    if _db_service_instance is not None:
+        return _db_service_instance
 
-        _db_service_instance = DatabaseService(db_uri)
+    with _db_service_instance_lock:
+        if _db_service_instance is None:
+            if not db_uri:
+                from config import DB_URI
 
+                db_uri = DB_URI
+            _db_service_instance = DatabaseService(db_uri)
 
     return _db_service_instance

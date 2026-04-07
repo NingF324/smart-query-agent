@@ -40,6 +40,7 @@ class Week7EndToEndSmokeTest(unittest.TestCase):
         self.assertEqual(report["summary"]["total_cases"], len(cases))
         self.assertGreater(report["summary"]["measured_ex_cases"], 0)
         self.assertGreaterEqual(report["summary"]["valid_sql_rate"], 0)
+        self.assertIn("failure_breakdown", report["summary"])
 
     def test_safety_sql_suite(self):
         safety_report = evaluate_safety_sql_cases(

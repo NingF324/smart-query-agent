@@ -4,6 +4,7 @@ SQL 校验节点 - 使用 EXPLAIN 和 LLM 修复 SQL 错误
 import difflib
 import logging
 import re
+import time
 from typing import Any, Dict, List, Tuple
 
 from agent.state import AgentState
@@ -27,14 +28,18 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
     execution_stats = dict(state.get("execution_stats", {}))
 
     logger.info(f"[SQL Validate] Validating SQL: {generated_sql[:100]}...")
+    started_at = time.perf_counter()
 
     if not generated_sql:
         logger.warning("[SQL Validate] No SQL to validate")
         no_sql_error = state.get("validation_result", {}).get("error", "No SQL generated")
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
         execution_stats.update({
             "validation_attempted": True,
             "validation_passed": False,
             "validation_type": "empty",
+            "validation_latency_ms": elapsed_ms,
+            "validation_error_type": "no_sql",
             "fix_attempted": False,
             "fix_success": False,
             "fix_strategy": "",
@@ -60,10 +65,13 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
         is_safe, safety_error = db_service.is_safe_sql(generated_sql)
         if not is_safe:
             logger.warning(f"[SQL Validate] SQL failed safety check: {safety_error}")
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
             execution_stats.update({
                 "validation_attempted": True,
                 "validation_passed": False,
                 "validation_type": "security",
+                "validation_latency_ms": elapsed_ms,
+                "validation_error_type": "permission_error",
                 "fix_attempted": False,
                 "fix_success": False,
                 "fix_strategy": "",
@@ -86,10 +94,13 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
         explain_result = db_service.explain_query(generated_sql)
         if explain_result["valid"]:
             logger.info("[SQL Validate] SQL validation passed")
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
             execution_stats.update({
                 "validation_attempted": True,
                 "validation_passed": True,
                 "validation_type": "explain",
+                "validation_latency_ms": elapsed_ms,
+                "validation_error_type": "",
                 "fix_attempted": False,
                 "fix_success": False,
                 "fix_strategy": "",
@@ -115,10 +126,13 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
         logger.warning(f"[SQL Validate] EXPLAIN failed: {error_msg}")
 
         if error_type == "unfixable":
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
             execution_stats.update({
                 "validation_attempted": True,
                 "validation_passed": False,
                 "validation_type": "explain",
+                "validation_latency_ms": elapsed_ms,
+                "validation_error_type": "unfixable",
                 "fix_attempted": False,
                 "fix_success": False,
                 "fix_strategy": "",
@@ -141,10 +155,13 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
         fixed_sql, fix_strategy = attempt_sql_fix(generated_sql, question, schemas, error_msg)
         if not fixed_sql or fixed_sql.strip() == generated_sql.strip():
             logger.warning("[SQL Validate] No effective SQL fix generated")
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
             execution_stats.update({
                 "validation_attempted": True,
                 "validation_passed": False,
                 "validation_type": "fix_skipped",
+                "validation_latency_ms": elapsed_ms,
+                "validation_error_type": "fixable",
                 "fix_attempted": True,
                 "fix_success": False,
                 "fix_strategy": "not_fixed",
@@ -167,10 +184,13 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
         fixed_safe, fixed_safety_error = db_service.is_safe_sql(fixed_sql)
         if not fixed_safe:
             logger.warning(f"[SQL Validate] Fixed SQL is unsafe: {fixed_safety_error}")
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
             execution_stats.update({
                 "validation_attempted": True,
                 "validation_passed": False,
                 "validation_type": "security",
+                "validation_latency_ms": elapsed_ms,
+                "validation_error_type": "permission_error",
                 "fix_attempted": True,
                 "fix_success": False,
                 "fix_strategy": fix_strategy,
@@ -193,10 +213,13 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
         verify_result = db_service.explain_query(fixed_sql)
         if verify_result["valid"]:
             logger.info(f"[SQL Validate] SQL fixed successfully via {fix_strategy}")
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
             execution_stats.update({
                 "validation_attempted": True,
                 "validation_passed": True,
                 "validation_type": fix_strategy,
+                "validation_latency_ms": elapsed_ms,
+                "validation_error_type": "",
                 "fix_attempted": True,
                 "fix_success": True,
                 "fix_strategy": fix_strategy,
@@ -219,10 +242,13 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
 
         verify_error = verify_result.get("error", "SQL fix verification failed")
         logger.warning(f"[SQL Validate] Fixed SQL still invalid: {verify_error}")
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
         execution_stats.update({
             "validation_attempted": True,
             "validation_passed": False,
             "validation_type": f"{fix_strategy}_failed",
+            "validation_latency_ms": elapsed_ms,
+            "validation_error_type": "fixable",
             "fix_attempted": True,
             "fix_success": False,
             "fix_strategy": fix_strategy,
@@ -244,10 +270,13 @@ def sql_validate_node(state: AgentState) -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"[SQL Validate] Validation error: {e}")
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
         execution_stats.update({
             "validation_attempted": True,
             "validation_passed": False,
             "validation_type": "exception",
+            "validation_latency_ms": elapsed_ms,
+            "validation_error_type": "exception",
             "fix_attempted": False,
             "fix_success": False,
             "fix_strategy": "",
