@@ -1,4 +1,4 @@
-﻿"""
+"""
 Schema retrieval node: retrieve relevant table schemas for SQL generation.
 """
 import logging
@@ -39,7 +39,7 @@ def schema_retrieve_node(state: AgentState) -> Dict[str, Any]:
 
         relevant_schemas: List[Dict[str, Any]] = []
         for table_name in selected_tables:
-            actual_table = normalize_table_name(table_name)
+            actual_table = strip_db_prefix(table_name)
             try:
                 table_info = db_service.get_table_info(actual_table)
                 ddl = db_service.get_table_schema(actual_table)
@@ -60,6 +60,29 @@ def schema_retrieve_node(state: AgentState) -> Dict[str, Any]:
                 )
             except Exception as exc:
                 logger.warning("[Schema Retrieve] Failed to get info for %s: %s", table_name, exc)
+
+        # If KB/ranking picked unusable tables, fall back to score-ranked full scan.
+        if not relevant_schemas and all_tables:
+            logger.warning("[Schema Retrieve] Zero schemas retrieved, applying full-table fallback")
+            for table_name, _score in rank_tables(all_tables, keywords)[:max(SCHEMA_MAX_TABLES, 8)]:
+                actual_table = strip_db_prefix(table_name)
+                try:
+                    table_info = db_service.get_table_info(actual_table)
+                    ddl = db_service.get_table_schema(actual_table)
+                    relevant_schemas.append(
+                        {
+                            "table_name": actual_table,
+                            "ddl": ddl,
+                            "columns": table_info["columns"],
+                            "row_count": table_info["row_count"],
+                            "primary_keys": table_info["primary_keys"],
+                            "foreign_keys": table_info["foreign_keys"],
+                        }
+                    )
+                    if len(relevant_schemas) >= SCHEMA_MAX_TABLES:
+                        break
+                except Exception as exc:
+                    logger.warning("[Schema Retrieve] Fallback failed for %s: %s", table_name, exc)
 
         logger.info(
             "[Schema Retrieve] Retrieved %s schemas from %s selected tables",
@@ -109,16 +132,16 @@ def choose_tables(
     seen_normalized: set[str] = set()
 
     def add_table(table_name: str) -> None:
-        normalized = normalize_table_name(table_name)
+        normalized = normalize_for_match(table_name)
         if not normalized or normalized in seen_normalized:
             return
         selected.append(table_name)
         seen_normalized.add(normalized)
 
     # Keep KB ordering, but only if table exists in current DB (by normalized name).
-    normalized_index = {normalize_table_name(name): name for name in all_tables}
+    normalized_index = {normalize_for_match(name): name for name in all_tables}
     for kb_name in kb_tables:
-        normalized = normalize_table_name(kb_name)
+        normalized = normalize_for_match(kb_name)
         if normalized in normalized_index:
             add_table(normalized_index[normalized])
 
@@ -146,13 +169,13 @@ def rank_tables(all_tables: List[str], keywords: List[str]) -> List[Tuple[str, i
         scored.append((table_name, score))
 
     # Higher score first, then stable lexical order for deterministic results.
-    scored.sort(key=lambda item: (-item[1], normalize_table_name(item[0])))
+    scored.sort(key=lambda item: (-item[1], normalize_for_match(item[0])))
     return scored
 
 
 def score_table_name(table_name: str, keywords: List[str]) -> int:
     """Score a table against current keywords; higher means more relevant."""
-    name = normalize_table_name(table_name)
+    name = normalize_for_match(table_name)
     score = 0
 
     # Generic boosts for common analytical tables.
@@ -199,15 +222,34 @@ def build_schema_keywords(resolved_question: str, intent: Dict[str, Any]) -> Lis
         if len(token) >= 2 and token not in keywords:
             keywords.append(token)
 
+    # Synonyms that help bridge natural language to schema naming.
+    expansions = {
+        "dog": ["pet", "pets", "has_pet"],
+        "dogs": ["pet", "pets", "has_pet"],
+        "cat": ["pet", "pets", "has_pet"],
+        "cats": ["pet", "pets", "has_pet"],
+        "youngest": ["age", "birth", "birth_date", "dob"],
+        "oldest": ["age", "birth", "birth_date", "dob"],
+    }
+    for token in list(keywords):
+        for alias in expansions.get(token, []):
+            if alias not in keywords:
+                keywords.append(alias)
+
     return keywords
 
 
-def normalize_table_name(table_name: str) -> str:
-    """Normalize table name by removing db prefix and lowercasing."""
+def strip_db_prefix(table_name: str) -> str:
+    """Strip optional db prefix, preserving original table-name casing."""
     value = str(table_name).strip()
     if "." in value:
         value = value.split(".")[-1]
-    return value.lower()
+    return value
+
+
+def normalize_for_match(table_name: str) -> str:
+    """Normalization for ranking/matching only (not for DB introspection calls)."""
+    return strip_db_prefix(table_name).lower()
 
 
 def split_tokens(text: str) -> Iterable[str]:

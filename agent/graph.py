@@ -105,7 +105,6 @@ def should_retry_sql(state: AgentState) -> str:
         return NODE_SQL_EXECUTE
 
     if error_type == "fixable" and retry_count < max_retries:
-        state["retry_count"] = retry_count + 1
         logger.info("[Route][Validate] Fixable error detected, retrying SQL generation")
         return NODE_SQL_GENERATE
 
@@ -129,7 +128,6 @@ def should_retry_execution(state: AgentState) -> str:
         return NODE_RESULT_INTERPRET
 
     if error_type == "execution_error" and retry_count < max_retries:
-        state["retry_count"] = retry_count + 1
         logger.info("[Route][Execute] Execution error detected, retrying SQL generation")
         return NODE_SQL_GENERATE
 

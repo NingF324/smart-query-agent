@@ -1,4 +1,4 @@
-﻿"""LLM service wrapper for DeepSeek-compatible OpenAI API."""
+"""LLM service wrapper for DeepSeek-compatible OpenAI API."""
 
 import logging
 import os
@@ -33,6 +33,8 @@ class LLMService:
         self.request_timeout = float(os.getenv("LLM_REQUEST_TIMEOUT", "30"))
         self.max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
         self.retry_base_delay = float(os.getenv("LLM_RETRY_BASE_DELAY", "0.8"))
+        self.reasoner_timeout = float(os.getenv("LLM_REASONER_TIMEOUT", "18"))
+        self.reasoner_max_retries = int(os.getenv("LLM_REASONER_MAX_RETRIES", "0"))
 
         if not self.api_key:
             logger.warning("DEEPSEEK_API_KEY is missing; LLM calls will fail.")
@@ -41,7 +43,8 @@ class LLMService:
         try:
             from openai import OpenAI
 
-            self._client = OpenAI(api_key=self.api_key, base_url=base_url)
+            # Disable SDK-level retries to avoid nested retry storms with our own retry loop.
+            self._client = OpenAI(api_key=self.api_key, base_url=base_url, max_retries=0)
             logger.info("LLM service initialized (v3=%s, r1=%s)", model_v3, model_r1)
         except ImportError:
             logger.error("openai package is missing. Install with: pip install openai")
@@ -62,6 +65,8 @@ class LLMService:
         model: str,
         temperature: float = 0,
         max_tokens: int = 4096,
+        timeout: Optional[float] = None,
+        max_retries: Optional[int] = None,
     ) -> str:
         if not self.api_key:
             raise ValueError("DEEPSEEK_API_KEY is missing")
@@ -70,7 +75,9 @@ class LLMService:
 
         request_id = str(uuid.uuid4())[:8]
         last_exc: Optional[Exception] = None
-        for attempt in range(self.max_retries + 1):
+        retry_budget = self.max_retries if max_retries is None else max_retries
+        request_timeout = self.request_timeout if timeout is None else timeout
+        for attempt in range(retry_budget + 1):
             start = time.perf_counter()
             try:
                 response = self._client.chat.completions.create(
@@ -81,7 +88,7 @@ class LLMService:
                     ],
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    timeout=self.request_timeout,
+                    timeout=request_timeout,
                 )
                 elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
                 logger.info(
@@ -103,7 +110,7 @@ class LLMService:
                     exc,
                 )
                 last_exc = exc
-                if attempt < self.max_retries and self._should_retry(exc):
+                if attempt < retry_budget and self._should_retry(exc):
                     self._sleep_before_retry(attempt)
                     continue
                 raise
@@ -122,12 +129,16 @@ class LLMService:
         **kwargs,
     ) -> str:
         model = self.model_r1 if use_reasoner else self.model_v3
+        timeout = self.reasoner_timeout if use_reasoner else self.request_timeout
+        retries = self.reasoner_max_retries if use_reasoner else self.max_retries
         return self._chat(
             system_prompt=system_prompt,
             user_message=user_message,
             model=model,
             temperature=temperature if temperature is not None else 0,
             max_tokens=max_tokens or (8192 if use_reasoner else 4096),
+            timeout=timeout,
+            max_retries=retries,
         )
 
     def generate_with_messages(self, messages: list, use_reasoner: bool = False, **kwargs) -> str:
@@ -145,7 +156,9 @@ class LLMService:
 
         request_id = str(uuid.uuid4())[:8]
         last_exc: Optional[Exception] = None
-        for attempt in range(self.max_retries + 1):
+        timeout = self.reasoner_timeout if use_reasoner else self.request_timeout
+        retry_budget = self.reasoner_max_retries if use_reasoner else self.max_retries
+        for attempt in range(retry_budget + 1):
             start = time.perf_counter()
             try:
                 response = self._client.chat.completions.create(
@@ -153,7 +166,7 @@ class LLMService:
                     messages=openai_messages,
                     temperature=0,
                     max_tokens=8192 if use_reasoner else 4096,
-                    timeout=self.request_timeout,
+                    timeout=timeout,
                 )
                 elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
                 logger.info(
@@ -175,7 +188,7 @@ class LLMService:
                     exc,
                 )
                 last_exc = exc
-                if attempt < self.max_retries and self._should_retry(exc):
+                if attempt < retry_budget and self._should_retry(exc):
                     self._sleep_before_retry(attempt)
                     continue
                 raise
