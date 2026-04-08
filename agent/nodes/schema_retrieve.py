@@ -36,10 +36,16 @@ def schema_retrieve_node(state: AgentState) -> Dict[str, Any]:
             max_tables=SCHEMA_MAX_TABLES,
             min_score=SCHEMA_MIN_SCORE,
         )
+        selected_tables = expand_with_related_tables(
+            db_service=db_service,
+            selected_tables=selected_tables,
+            all_tables=all_tables,
+            max_tables=SCHEMA_MAX_TABLES,
+        )
 
         relevant_schemas: List[Dict[str, Any]] = []
         for table_name in selected_tables:
-            actual_table = strip_db_prefix(table_name)
+            actual_table = resolve_table_name(table_name, all_tables)
             try:
                 table_info = db_service.get_table_info(actual_table)
                 ddl = db_service.get_table_schema(actual_table)
@@ -65,7 +71,7 @@ def schema_retrieve_node(state: AgentState) -> Dict[str, Any]:
         if not relevant_schemas and all_tables:
             logger.warning("[Schema Retrieve] Zero schemas retrieved, applying full-table fallback")
             for table_name, _score in rank_tables(all_tables, keywords)[:max(SCHEMA_MAX_TABLES, 8)]:
-                actual_table = strip_db_prefix(table_name)
+                actual_table = resolve_table_name(table_name, all_tables)
                 try:
                     table_info = db_service.get_table_info(actual_table)
                     ddl = db_service.get_table_schema(actual_table)
@@ -161,6 +167,68 @@ def choose_tables(
     return selected[:max_tables]
 
 
+def expand_with_related_tables(
+    db_service,
+    selected_tables: List[str],
+    all_tables: List[str],
+    max_tables: int,
+) -> List[str]:
+    """Expand selected tables with FK-neighbor tables to improve join grounding."""
+    if not selected_tables:
+        return selected_tables
+
+    ordered: List[str] = []
+    seen: set[str] = set()
+
+    def add_table(name: str) -> None:
+        resolved = resolve_table_name(name, all_tables)
+        norm = normalize_for_match(resolved)
+        if not norm or norm in seen:
+            return
+        ordered.append(resolved)
+        seen.add(norm)
+
+    for table in selected_tables:
+        add_table(table)
+
+    # Build a lightweight undirected FK graph for this DB.
+    neighbors: Dict[str, set[str]] = {}
+    for table in all_tables:
+        resolved_table = resolve_table_name(table, all_tables)
+        table_norm = normalize_for_match(resolved_table)
+        neighbors.setdefault(table_norm, set())
+        try:
+            info = db_service.get_table_info(resolved_table)
+        except Exception as exc:
+            logger.debug("[Schema Retrieve] Skip FK graph table %s: %s", resolved_table, exc)
+            continue
+        for fk in info.get("foreign_keys", []):
+            ref_table = resolve_table_name(fk.get("ref_table", ""), all_tables)
+            ref_norm = normalize_for_match(ref_table)
+            if not ref_norm or ref_norm == table_norm:
+                continue
+            neighbors.setdefault(ref_norm, set())
+            neighbors[table_norm].add(ref_norm)
+            neighbors[ref_norm].add(table_norm)
+
+    cursor = 0
+    while cursor < len(ordered) and len(ordered) < max_tables:
+        current_norm = normalize_for_match(ordered[cursor])
+        for neighbor_norm in sorted(neighbors.get(current_norm, set())):
+            if len(ordered) >= max_tables:
+                break
+            if neighbor_norm in seen:
+                continue
+            # Resolve back to original case from all_tables if possible.
+            for table in all_tables:
+                if normalize_for_match(table) == neighbor_norm:
+                    add_table(table)
+                    break
+        cursor += 1
+
+    return ordered[:max_tables]
+
+
 def rank_tables(all_tables: List[str], keywords: List[str]) -> List[Tuple[str, int]]:
     """Rank tables by name overlap with extracted keywords."""
     scored: List[Tuple[str, int]] = []
@@ -245,6 +313,19 @@ def strip_db_prefix(table_name: str) -> str:
     if "." in value:
         value = value.split(".")[-1]
     return value
+
+
+def resolve_table_name(table_name: str, all_tables: List[str]) -> str:
+    """Resolve table name to an actual table from current DB (case-insensitive)."""
+    raw = strip_db_prefix(table_name)
+    if raw in all_tables:
+        return raw
+
+    raw_norm = normalize_for_match(raw)
+    for existing in all_tables:
+        if normalize_for_match(existing) == raw_norm:
+            return existing
+    return raw
 
 
 def normalize_for_match(table_name: str) -> str:

@@ -211,7 +211,12 @@ class LLMService:
             f"You are an expert {dialect_name} SQL generator. "
             "Generate exactly one read-only SQL statement. "
             "Rules: only SELECT/CTE; no INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE; "
-            "return SQL text only without markdown."
+            "return SQL text only without markdown. "
+            "Prefer foreign-key/ID-based joins instead of name-based joins when possible. "
+            "Return only columns explicitly requested by the question; avoid helper columns unless requested. "
+            "Prefer INNER JOIN by default; use LEFT JOIN only when the question explicitly asks to keep unmatched rows. "
+            "Use DISTINCT only when the question asks for distinct/different/unique values. "
+            "Do not add CAST() unless required to safely compare mixed text/number values."
         )
 
         user_message = f"""Database Schema:
