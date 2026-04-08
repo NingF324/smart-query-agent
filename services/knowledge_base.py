@@ -4,6 +4,7 @@
 """
 import os
 import logging
+import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -432,6 +433,7 @@ SQL:
 
 # 创建全局单例
 _knowledge_base_instance: Optional[KnowledgeBase] = None
+_knowledge_base_init_failed_at: Optional[float] = None
 
 
 def get_knowledge_base(host: Optional[str] = None,
@@ -447,11 +449,25 @@ def get_knowledge_base(host: Optional[str] = None,
         KnowledgeBase: 知识库实例
     """
     global _knowledge_base_instance
+    global _knowledge_base_init_failed_at
 
     if _knowledge_base_instance is None:
-        _knowledge_base_instance = KnowledgeBase(
-            host=host,
-            port=port
-        )
+        cooldown = float(os.getenv("KB_INIT_RETRY_COOLDOWN_SECONDS", "60"))
+        now = time.time()
+        if _knowledge_base_init_failed_at and now - _knowledge_base_init_failed_at < cooldown:
+            raise RuntimeError(
+                f"Knowledge base init is temporarily disabled after recent failure "
+                f"({round(now - _knowledge_base_init_failed_at, 1)}s ago)"
+            )
+
+        try:
+            _knowledge_base_instance = KnowledgeBase(
+                host=host,
+                port=port
+            )
+            _knowledge_base_init_failed_at = None
+        except Exception:
+            _knowledge_base_init_failed_at = now
+            raise
 
     return _knowledge_base_instance

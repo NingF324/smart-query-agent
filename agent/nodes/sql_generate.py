@@ -279,12 +279,77 @@ def extract_sql_from_llm_response(response: str) -> str:
     if not response:
         return ""
 
-    sql_match = re.search(r"```sql\s*(.*?)\s*```", response, re.DOTALL | re.IGNORECASE)
-    if sql_match:
-        return sql_match.group(1).strip()
+    fenced_blocks = re.findall(r"```(?:sql)?\s*(.*?)\s*```", response, re.DOTALL | re.IGNORECASE)
+    if fenced_blocks:
+        candidates = [block.strip() for block in fenced_blocks if block and block.strip()]
+        if candidates:
+            best = max(candidates, key=len)
+            return sanitize_sql_structure(best)
 
-    sql_match = re.search(r"(SELECT\b.*?)(?:;\s*)?$", response, re.DOTALL | re.IGNORECASE)
+    sql_match = re.search(r"((?:WITH|SELECT)\b.*?)(?:;\s*)?$", response, re.DOTALL | re.IGNORECASE)
     if sql_match:
-        return sql_match.group(1).strip()
+        return sanitize_sql_structure(sql_match.group(1))
 
-    return response.strip()
+    return sanitize_sql_structure(response)
+
+
+def sanitize_sql_structure(sql_text: str) -> str:
+    """Lightweight SQL text cleanup for common LLM output artifacts."""
+    sql = str(sql_text or "").strip()
+    if not sql:
+        return ""
+
+    sql = sql.replace("\r\n", "\n").strip()
+    sql = re.sub(r"^```(?:sql)?\s*", "", sql, flags=re.IGNORECASE).strip()
+    sql = re.sub(r"\s*```$", "", sql).strip()
+
+    start_match = re.search(r"\b(?:WITH|SELECT)\b", sql, re.IGNORECASE)
+    if start_match:
+        sql = sql[start_match.start() :].strip()
+
+    # Remove trailing prose fragments after SQL.
+    sql = re.split(r"\n\s*(?:Explanation|Reasoning|答案|说明)\s*[:：]", sql, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+
+    sql = _repair_missing_with_cte(sql)
+
+    # Keep at most one trailing semicolon.
+    sql = sql.rstrip()
+    if sql.count(";") > 1:
+        sql = sql.split(";")[0].strip()
+    if sql.endswith(";"):
+        sql = sql[:-1].rstrip()
+
+    return sql
+
+
+def _repair_missing_with_cte(sql: str) -> str:
+    """Fix malformed pattern: `SELECT ... ) SELECT ... JOIN cte_name ...` without WITH."""
+    if not sql or re.match(r"^\s*WITH\b", sql, flags=re.IGNORECASE):
+        return sql
+
+    pattern = re.compile(r"^\s*(SELECT[\s\S]+?)\)\s*(SELECT[\s\S]+)\s*$", re.IGNORECASE)
+    match = pattern.match(sql)
+    if not match:
+        return sql
+
+    first_select = match.group(1).strip()
+    second_select = match.group(2).strip()
+    cte_name = _infer_cte_name_from_second_select(second_select)
+    if not cte_name:
+        return sql
+
+    return f"WITH {cte_name} AS (\n{first_select}\n)\n{second_select}"
+
+
+def _infer_cte_name_from_second_select(second_select: str) -> str:
+    """Infer CTE name from JOIN/CROSS JOIN target used in downstream SELECT."""
+    for regex in [
+        r"\bJOIN\s+([A-Za-z_][A-Za-z0-9_]*)\s+[A-Za-z_][A-Za-z0-9_]*\b",
+        r"\bCROSS\s+JOIN\s+([A-Za-z_][A-Za-z0-9_]*)\s+[A-Za-z_][A-Za-z0-9_]*\b",
+    ]:
+        join_match = re.search(regex, second_select, re.IGNORECASE)
+        if join_match:
+            token = join_match.group(1)
+            if token.lower() not in {"select", "from", "where", "group", "order", "limit"}:
+                return token
+    return ""
