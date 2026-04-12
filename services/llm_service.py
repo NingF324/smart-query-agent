@@ -216,7 +216,12 @@ class LLMService:
             "Return only columns explicitly requested by the question; avoid helper columns unless requested. "
             "Prefer INNER JOIN by default; use LEFT JOIN only when the question explicitly asks to keep unmatched rows. "
             "Use DISTINCT only when the question asks for distinct/different/unique values. "
-            "Do not add CAST() unless required to safely compare mixed text/number values."
+            "Do not add CAST() unless required to safely compare mixed text/number values. "
+            "CRITICAL: Do NOT add LIMIT unless the question explicitly asks for a specific number of rows (e.g. 'top 5', 'first 3') "
+            "OR the question implies a single result via superlatives like 'the most', 'the highest', 'the youngest' (use LIMIT 1 in those cases). "
+            "CRITICAL: Do NOT add column aliases (AS keyword) for aggregate or simple columns unless the question requires a specific name. "
+            "For example, write COUNT(*) not COUNT(*) AS count, write AVG(age) not AVG(age) AS avg_age. "
+            "Match column names exactly as they appear in the schema DDL — use the same casing."
         )
 
         user_message = f"""Database Schema:

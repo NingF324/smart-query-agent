@@ -188,7 +188,34 @@ class DatabaseService:
             "primary_keys": primary_keys,
             "foreign_keys": foreign_keys,
             "row_count": self.get_row_count(table_name),
+            "sample_values": self._get_sample_values(table_name, columns),
         }
+
+    def _get_sample_values(self, table_name: str, columns: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        """Get up to 3 distinct sample values for text/enum-like columns to aid SQL generation."""
+        sample_values: Dict[str, List[str]] = {}
+        text_like_types = {"VARCHAR", "TEXT", "CHAR", "NVARCHAR", "NCHAR", "STRING"}
+
+        for col in columns:
+            col_type = str(col.get("type", "")).upper()
+            # Only sample text-like columns (skip IDs, numbers, dates)
+            is_text_like = any(t in col_type for t in text_like_types)
+            if not is_text_like:
+                continue
+
+            col_name = col["name"]
+            try:
+                with self.engine.connect() as conn:
+                    result = conn.execute(
+                        text(f"SELECT DISTINCT {col_name} FROM {table_name} WHERE {col_name} IS NOT NULL LIMIT 3")
+                    )
+                    values = [str(row[0]) for row in result]
+                    if values:
+                        sample_values[col_name] = values
+            except Exception:
+                pass
+
+        return sample_values
 
     def test_connection(self) -> bool:
         try:

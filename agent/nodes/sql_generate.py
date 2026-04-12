@@ -153,6 +153,15 @@ def build_schema_description(schemas: list) -> str:
                 col_name = col.get("name", "")
                 col_type = col.get("type", "")
                 description += f"  - {col_name} ({col_type})\n"
+
+        # Add sample values for text columns to help with value matching
+        sample_values = schema.get("sample_values", {})
+        if sample_values:
+            description += "Sample values:\n"
+            for col_name, values in sample_values.items():
+                display_vals = ", ".join(repr(v) for v in values[:3])
+                description += f"  - {col_name}: [{display_vals}]\n"
+
         description += "\n"
     return description
 
@@ -172,7 +181,7 @@ def generate_sql_with_rules(question: str, intent: dict, schemas: list) -> str:
     """Rule-based fallback SQL generation when LLM is unavailable."""
     query_type = intent.get("query_type", "unknown")
     entities = intent.get("entities", [])
-    limit = intent.get("limit", 100)
+    limit = intent.get("limit") or 100
     time_expression = intent.get("time_expression")
 
     if query_type == "count":
@@ -372,6 +381,8 @@ def align_sql_with_question(sql_text: str, question: str) -> str:
 
     q = (question or "").strip().lower()
     sql = _normalize_country_demonyms(sql)
+    sql = _strip_unwanted_limit(sql, q)
+    sql = _strip_column_aliases(sql, q)
     sql = _trim_year_count_projection(sql, q)
     sql = _drop_unasked_id_projection(sql, q)
     sql = _prune_extra_projection_columns(sql, q)
@@ -593,3 +604,103 @@ def split_select_items(select_expr: str) -> List[str]:
     if tail:
         items.append(tail)
     return items
+
+
+# ── New post-processing functions ──────────────────────────────────────────
+
+def _strip_unwanted_limit(sql: str, question_lower: str) -> str:
+    """Remove LIMIT clause when the question does not ask for a specific row count.
+
+    Keeps LIMIT when the question contains phrases like 'top N', 'first N',
+    'N most', 'how many ... top', or similar explicit row-limit cues.
+    """
+    # Check if question asks for a specific number of rows
+    limit_cues = [
+        r'\btop\s+\d+\b',
+        r'\bfirst\s+\d+\b',
+        r'\blast\s+\d+\b',
+        r'\bhow many\s+.*\btop\b',
+        r'\bn\s+most\b',
+        r'\bn\s+highest\b',
+        r'\bn\s+lowest\b',
+        r'\blimit\s+\d+\b',
+        r'\b\d+\s+most\b',
+        r'\b\d+\s+highest\b',
+        r'\b\d+\s+lowest\b',
+    ]
+    has_limit_intent = any(re.search(cue, question_lower) for cue in limit_cues)
+
+    # Also keep LIMIT 1 for superlatives like "the most", "the highest"
+    has_superlative = bool(re.search(
+        r'\b(most|highest|lowest|oldest|youngest|earliest|latest|first|top)\b',
+        question_lower,
+    ))
+
+    if has_limit_intent:
+        return sql
+
+    # If superlative with LIMIT 1, keep it
+    limit_match = re.search(r'\bLIMIT\s+(\d+)\s*$', sql, re.IGNORECASE)
+    if not limit_match:
+        return sql
+
+    limit_value = int(limit_match.group(1))
+    if has_superlative and limit_value == 1:
+        return sql
+
+    # Remove the LIMIT clause
+    return re.sub(r'\s+LIMIT\s+\d+\s*$', '', sql, flags=re.IGNORECASE).strip()
+
+
+def _strip_column_aliases(sql: str, question_lower: str) -> str:
+    """Remove column aliases (AS keyword) from SELECT clause when not requested.
+
+    E.g. converts `SELECT AVG(age) AS average_age` -> `SELECT AVG(age)`
+    Preserves aliases that match explicit column names in the question.
+    """
+    pattern = re.compile(r'^\s*SELECT\s+(.+?)\s+FROM\s+([\s\S]+)$', re.IGNORECASE)
+    match = pattern.match(sql.strip())
+    if not match:
+        return sql
+
+    select_expr = match.group(1).strip()
+    from_expr = match.group(2).strip()
+
+    parts = split_select_items(select_expr)
+    cleaned_parts: List[str] = []
+
+    for part in parts:
+        cleaned = _remove_alias_from_expr(part)
+        cleaned_parts.append(cleaned)
+
+    return f"SELECT {', '.join(cleaned_parts)} FROM {from_expr}"
+
+
+def _remove_alias_from_expr(expr: str) -> str:
+    """Remove AS alias from a single SELECT expression, preserving table.column refs."""
+    stripped = expr.strip()
+
+    # Skip simple column references (no aggregate or expression)
+    if re.match(r'^[A-Za-z_]\w*(\.[A-Za-z_]\w*)?$', stripped):
+        return stripped
+
+    # Remove trailing AS alias, but only at the top level (not inside parentheses)
+    # Pattern: ... AS identifier (at end of expression)
+    alias_pattern = re.compile(
+        r'\s+AS\s+([A-Za-z_]\w*)\s*$',
+        re.IGNORECASE,
+    )
+    match = alias_pattern.search(stripped)
+    if match:
+        return stripped[:match.start()].strip()
+
+    # Also handle backtick aliases
+    alias_pattern_bt = re.compile(
+        r'\s+AS\s+`([^`]+)`\s*$',
+        re.IGNORECASE,
+    )
+    match_bt = alias_pattern_bt.search(stripped)
+    if match_bt:
+        return stripped[:match_bt.start()].strip()
+
+    return stripped

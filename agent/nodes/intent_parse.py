@@ -58,7 +58,7 @@ def intent_parse_node(state: AgentState) -> Dict[str, Any]:
         "query_type": detect_query_type(resolved_question),
         "entities": extract_entities(resolved_question),
         "time_range": extract_time_range(resolved_question),
-        "limit": extract_limit(resolved_question) or 100,
+        "limit": extract_limit(resolved_question) or None,
         "schema_hints": build_schema_hints(resolved_question),
         "is_follow_up": resolution["is_follow_up"],
         "reference_question": resolution.get("reference_question", ""),

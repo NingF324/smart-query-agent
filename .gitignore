@@ -54,3 +54,16 @@ Thumbs.db
 
 # Test results
 results/
+
+# Papers / thesis documents
+papers/
+thesis/
+
+# WorkBuddy agent data
+.workbuddy/
+
+# Test batch files
+test_batch*.txt
+
+# References
+references/

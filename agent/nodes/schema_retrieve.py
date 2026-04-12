@@ -57,6 +57,7 @@ def schema_retrieve_node(state: AgentState) -> Dict[str, Any]:
                         "row_count": table_info["row_count"],
                         "primary_keys": table_info["primary_keys"],
                         "foreign_keys": table_info["foreign_keys"],
+                        "sample_values": table_info.get("sample_values", {}),
                     }
                 )
                 logger.info(
@@ -83,6 +84,7 @@ def schema_retrieve_node(state: AgentState) -> Dict[str, Any]:
                             "row_count": table_info["row_count"],
                             "primary_keys": table_info["primary_keys"],
                             "foreign_keys": table_info["foreign_keys"],
+                            "sample_values": table_info.get("sample_values", {}),
                         }
                     )
                     if len(relevant_schemas) >= SCHEMA_MAX_TABLES:
